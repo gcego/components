@@ -17,7 +17,7 @@ so every error can be reported with its path.
 ## Collected mode
 
 ```php
-$result = $component->validate();   // or (new ComponentValidator)->validate($component)
+$result = $component->validate();   // or app(ComponentValidator::class)->validate($component)
 
 $result->isValid();
 $result->errors();                       // list<ValidationError>
@@ -32,7 +32,7 @@ echo $result->format();
 
 ```php
 $component->assertValid();   // returns $component when valid
-(new ComponentValidator)->assertValid($component);
+app(ComponentValidator::class)->assertValid($component);
 ```
 
 When validation fails, both throw `InvalidComponentException`. The message

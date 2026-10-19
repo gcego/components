@@ -9,8 +9,9 @@ use Gcego\Components\Contracts\Buildable;
 use Gcego\Components\Contracts\ComponentInterface;
 use Gcego\Components\Contracts\ConfigurationNode;
 use Gcego\Components\Exceptions\InvalidBuilderException;
-use Gcego\Components\Property;
-use Gcego\Components\TypeKind;
+use Gcego\Components\Facades\Components;
+use Gcego\Components\Properties\Property;
+use Gcego\Components\Schema\TypeKind;
 
 /**
  * The fluent, definition-time form of a component:
@@ -30,6 +31,8 @@ use Gcego\Components\TypeKind;
  */
 class ComponentBuilder implements Buildable
 {
+    private const int MaxItemDepth = 32;
+
     /**
      * @var array<string, Property>
      */
@@ -51,6 +54,8 @@ class ComponentBuilder implements Buildable
      */
     final public function __construct(protected readonly string $component, array $items = [])
     {
+        Components::getFacadeRoot();
+
         if (! is_subclass_of($component, Component::class) && $component !== Component::class) {
             throw InvalidBuilderException::notAComponent($component);
         }
@@ -126,7 +131,7 @@ class ComponentBuilder implements Buildable
      */
     public function schema(iterable|ComponentInterface|Buildable $children): static
     {
-        return $this->with(...(is_iterable($children) ? [...$children] : [$children]));
+        return $this->with($children);
     }
 
     /**
@@ -175,13 +180,38 @@ class ComponentBuilder implements Buildable
 
     public function build(): Component
     {
+        $component = $this->instantiate($this->buildItems());
+
+        if (! $component instanceof $this->component) {
+            throw InvalidBuilderException::wrongComponent($this->component, $component::class);
+        }
+
+        return $component;
+    }
+
+    /**
+     * Adapt canonical items to a component with a custom constructor.
+     * Override this hook rather than bypassing the component's constructor.
+     *
+     * @param  list<Property|ComponentInterface|ConfigurationNode>  $items
+     */
+    protected function instantiate(array $items): Component
+    {
         $component = $this->component;
 
-        return new $component(
+        return new $component(...$items);
+    }
+
+    /**
+     * @return list<Property|ComponentInterface|ConfigurationNode>
+     */
+    protected function buildItems(): array
+    {
+        return [
             ...array_values($this->properties),
             ...array_map(static fn (ComponentInterface|Buildable $child): ComponentInterface => $child instanceof Buildable ? $child->build() : $child, $this->children),
             ...$this->configurations,
-        );
+        ];
     }
 
     /**
@@ -402,23 +432,27 @@ class ComponentBuilder implements Buildable
     }
 
     /**
-     * @param  array<int|string, mixed>  $items
+     * @param  iterable<mixed>  $items
      */
-    private function absorbItems(array $items): void
+    private function absorbItems(iterable $items, int $depth = 0): void
     {
+        if ($depth > self::MaxItemDepth) {
+            throw InvalidBuilderException::nestingTooDeep($this->component, self::MaxItemDepth);
+        }
+
         foreach ($items as $item) {
             if ($item === null) {
                 continue;
             }
 
-            if (is_iterable($item)) {
-                $this->absorbItems([...$item]);
-            } elseif ($item instanceof Property) {
+            if ($item instanceof Property) {
                 $this->properties[$item->key] = $item;
             } elseif ($item instanceof ComponentInterface || $item instanceof Buildable) {
                 $this->children[] = $item;
             } elseif ($item instanceof ConfigurationNode) {
                 $this->configurations[] = $item;
+            } elseif (is_iterable($item)) {
+                $this->absorbItems($item, $depth + 1);
             } else {
                 throw InvalidBuilderException::unsupportedItem($this->component, $item);
             }

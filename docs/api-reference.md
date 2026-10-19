@@ -7,10 +7,12 @@ All classes live under `Gcego\Components`.
 | Member | Description |
 | --- | --- |
 | `const Name`, `Label`, `Description`, `Id` | built-in property keys (`'name'`, `'label'`, `'description'`, `'id'`) |
-| `const IdPattern` | `/^[A-Za-z][A-Za-z0-9_.:\-]*$/` |
+| `const IdPattern` | `/\A[A-Za-z][A-Za-z0-9_.:\-]*\z/` |
 | `__construct(mixed ...$items)` | properties, children, configuration nodes, and leading shorthand values |
+| `static define(mixed ...$items): ComponentBuilder` | start an immutable fluent builder |
+| `static builderClass(): class-string<ComponentBuilder>` | override to choose a custom builder |
 | `static definition(): ComponentDefinition` | cached schema (final) |
-| `protected static define(): ComponentDefinition` | override to declare the schema |
+| `protected static defineSchema(): ComponentDefinition` | override to declare the schema |
 | `protected static shorthand(): list<string>` | override to enable positional values |
 | `type(): string` | schema type identifier |
 | `id(): ?string` / `name(): ?string` | explicit id / name |
@@ -25,12 +27,46 @@ All classes live under `Gcego\Components`.
 | `normalize(): array` / `tree(): ComponentTree` | |
 | `withProperty(Property ...)`, `withoutProperty(string ...)`, `withChildren(ComponentInterface ...)`, `withAppendedChildren(ComponentInterface ...)`, `withConfigurations(ConfigurationNode ...)` | immutable copies returning `static` |
 
-## `Property` (final readonly)
+## `Facades\Components`
+
+Laravel facade for `ComponentManager`, discovered as the `Components`
+alias. Static methods: `define()`, `make()`, `tree()`, `validate()`, `normalize()`
+`inspect()` and `normalizeValue()`. `getFacadeRoot(): ComponentManager` returns the registered
+manager and fails clearly when Laravel facades or the provider are not initialized.
+
+## `ComponentManager`
+
+Request/job-scoped service behind the `Components` facade, also available through
+constructor injection. Managers from inactive applications or scopes reject use.
+Debug output hides the container, and native manager serialization is rejected. Methods:
+`define(class-string<Component>, array $items = []): ComponentBuilder`,
+`make(class-string<Component> $component = Component::class, array $items = []): Component`,
+`tree(ComponentInterface): ComponentTree`, `validate(ComponentInterface): ValidationResult`,
+`normalize(ComponentInterface): array`, `normalizeValue(mixed, string $location = 'value'): mixed`,
+`inspect(ComponentInterface): ComponentInspection`.
+
+## `Building\ComponentBuilder`
+
+`build(): Component` builds children and passes canonical items to the protected
+`instantiate(array $items): Component` hook. Override that hook to adapt a custom
+component constructor. `buildItems(): list<Property|ComponentInterface|ConfigurationNode>`
+exposes the canonical items to custom builders. `prepare(array $items): array`
+adapts incoming definition arguments. Built components must match the requested
+component class. Nested iterable item lists are limited to 32 levels.
+
+## `ComponentServiceProvider`
+
+Required deferred Laravel provider. `register(): void` binds the manager as scoped,
+stateless services as singletons, and builders/trees as transient factories,
+preserving existing bindings; `provides(): list<class-string>`
+lists those services. See [Laravel integration](laravel.md).
+
+## `Properties\Property` (final readonly)
 
 `__construct(string $key, mixed $value = null)`, public `$key` and `$value`,
 `const KeyPattern`, `static isSupportedValue(mixed): bool`.
 
-## `PropertyDefinition` (final readonly)
+## `Schema\PropertyDefinition` (final readonly)
 
 `__construct(string $name, Type|list<Type> $type, bool $required = false, bool $nullable = false, mixed $default = <absent>, ?array $allowedValues = null, ?Closure $rule = null, ?string $ruleDescription = null, ?Closure $normalizer = null, ?string $description = null)`
 
@@ -41,14 +77,14 @@ Public properties: `name`, `types`, `required`, `nullable`, `hasDefault`,
 Methods: `acceptsType()`, `allowsValue()`, `satisfiesRule()`, `expectedType()`,
 `expectedValues()`, `expectedRule()`, `toArray()`.
 
-## `Type` (final readonly)
+## `Schema\Type` (final readonly)
 
 `string()`, `int()`, `float()`, `bool()`, `array()`, `list()`, `mixed()`,
 `enum(class-string<UnitEnum>)`, `classString(?class-string $parent = null)`,
 `instanceOf(class-string)`. Public `kind` (`TypeKind`) and `class`. Methods:
 `accepts(mixed): bool`, `describe(): string`.
 
-## `ComponentDefinition` (final readonly)
+## `Schema\ComponentDefinition` (final readonly)
 
 `__construct(string $type, list<PropertyDefinition> $properties = [], bool $allowsUnknownProperties = false, bool $allowsChildren = true, ?list<class-string> $allowedChildren = null, int $minChildren = 0, ?int $maxChildren = null, ?list<class-string> $allowedConfigurations = null, list<Closure> $constraints = [])`
 
@@ -61,7 +97,7 @@ Modifiers (return a new definition): `withType()`, `withProperties()`,
 `withAllowedChildren(?array $types, int $min = 0, ?int $max = null)`,
 `withoutChildren()`, `withAllowedConfigurations(?array)`, `withConstraint(Closure)`.
 
-## Collections (final readonly, `Countable`, `IteratorAggregate`)
+## `Collections` (final readonly, `Countable`, `IteratorAggregate`)
 
 | Class | Methods |
 | --- | --- |
@@ -73,9 +109,9 @@ Modifiers (return a new definition): `withType()`, `withProperties()`,
 
 | Class | Members |
 | --- | --- |
-| `ComponentTree` | `root`, `rootNode`, `depthFirst`, `breadthFirst`, `find`, `contains`, `findById`, `findByType`, `parentOf`, `childrenOf`, `descendantCount`, `depth`, `duplicateIds`, `count`, iteration |
-| `ComponentPath` | `root`, `fromSegments`, `fromString`, `child`, `parent`, `segments`, `last`, `depth`, `isAncestorOf`, `equals`, `toString` |
-| `TreeNode` | `component`, `path`, `depth`, `index`, `parentPath`, `isRoot()`, `identity()` |
+| `Trees\ComponentTree` | `root`, `rootNode`, `depthFirst`, `breadthFirst`, `find`, `contains`, `findById`, `findByType`, `parentOf`, `childrenOf`, `descendantCount`, `depth`, `duplicateIds`, `count`, iteration |
+| `Trees\ComponentPath` | `root`, `fromSegments`, `fromString`, `child`, `parent`, `segments`, `last`, `depth`, `isAncestorOf`, `equals`, `toString` |
+| `Trees\TreeNode` | `component`, `path`, `depth`, `index`, `parentPath`, `isRoot()`, `identity()` |
 | `Support\ComponentIdentity` | `type`, `explicitId`, `path`, `occurrenceKey()`, `stableKey()`, `hasExplicitId()` |
 
 ## Traversal
@@ -100,7 +136,7 @@ Modifiers (return a new definition): `withType()`, `withProperties()`,
 
 | Class | Members |
 | --- | --- |
-| `Normalization\ComponentNormalizer(bool $includeSchema = false)` | `normalize(ComponentInterface): array`, `normalizeValue(mixed, string $location = 'value'): mixed` |
+| `Normalization\ComponentNormalizer(ComponentWalker $walker, bool $includeSchema = false)` | `normalize(ComponentInterface): array`, `normalizeValue(mixed, string $location = 'value'): mixed`, `normalizeProperties(array $values, ComponentDefinition $definition, string $location = 'component'): array` |
 | `Normalization\RuntimePlaceholder` | `class` |
 | `Inspection\ComponentInspector` | `inspect(ComponentInterface): ComponentInspection`, `inspectTree(ComponentInterface): list<ComponentInspection>` |
 | `Inspection\ComponentInspection` | `class`, `type`, `id`, `path`, `depth`, `supportedProperties`, `requiredProperties`, `allowsUnknownProperties`, `explicitProperties`, `effectiveProperties`, `defaults`, `childCount`, `childrenAllowed`, `allowedChildren`, `minChildren`, `maxChildren`, `configurationClasses`, `errors`, `isValid()`, `toArray()` |

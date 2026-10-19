@@ -6,16 +6,25 @@ namespace Gcego\Components;
 
 use BackedEnum;
 use Gcego\Components\Building\ComponentBuilder;
+use Gcego\Components\Collections\ComponentCollection;
+use Gcego\Components\Collections\ConfigurationCollection;
+use Gcego\Components\Collections\PropertyCollection;
 use Gcego\Components\Contracts\ComponentInterface;
 use Gcego\Components\Contracts\ConfigurationNode;
 use Gcego\Components\Exceptions\DuplicatePropertyException;
 use Gcego\Components\Exceptions\InvalidComponentException;
 use Gcego\Components\Exceptions\MissingPropertyException;
-use Gcego\Components\Normalization\ComponentNormalizer;
+use Gcego\Components\Facades\Components;
+use Gcego\Components\Properties\Property;
+use Gcego\Components\Schema\ComponentDefinition;
+use Gcego\Components\Schema\PropertyDefinition;
+use Gcego\Components\Schema\Type;
+use Gcego\Components\Schema\TypeKind;
 use Gcego\Components\Support\ConstructorArguments;
-use Gcego\Components\Validation\ComponentValidator;
+use Gcego\Components\Trees\ComponentTree;
 use Gcego\Components\Validation\ValidationResult;
 use UnitEnum;
+use WeakReference;
 
 /**
  * The base of every GCEGO component.
@@ -54,12 +63,7 @@ class Component implements ComponentInterface
     /**
      * Explicit ids must start with a letter and contain only letters, digits, "_", "-", "." or ":".
      */
-    public const string IdPattern = '/^[A-Za-z][A-Za-z0-9_.:\-]*$/';
-
-    /**
-     * @var array<class-string, ComponentDefinition>
-     */
-    private static array $definitions = [];
+    public const string IdPattern = '/\A[A-Za-z][A-Za-z0-9_.:\-]*\z/';
 
     private PropertyCollection $properties;
 
@@ -70,11 +74,18 @@ class Component implements ComponentInterface
     private ?ValidationResult $validationResult = null;
 
     /**
+     * @var WeakReference<ComponentManager>|null
+     */
+    private ?WeakReference $validationManager = null;
+
+    /**
      * @param  Property|ComponentInterface|ConfigurationNode|scalar|UnitEnum|array<mixed>|null  ...$items
      *                                                                                                     Leading non-item values are mapped to the keys returned by shorthand().
      */
     public function __construct(mixed ...$items)
     {
+        Components::getFacadeRoot();
+
         $parsed = ConstructorArguments::parse(static::class, static::shorthand(), $items);
 
         try {
@@ -97,9 +108,7 @@ class Component implements ComponentInterface
      */
     public static function define(mixed ...$items): ComponentBuilder
     {
-        $builder = static::builderClass();
-
-        return new $builder(static::class, $items);
+        return Components::define(static::class, $items);
     }
 
     /**
@@ -123,11 +132,11 @@ class Component implements ComponentInterface
     }
 
     /**
-     * The schema of this class, built once and cached for the process lifetime.
+     * The schema of this class, cached within the active provider scope.
      */
     final public static function definition(): ComponentDefinition
     {
-        return self::$definitions[static::class] ??= static::defineSchema();
+        return Components::getFacadeRoot()->rememberDefinition(static::class, static::defineSchema(...));
     }
 
     /**
@@ -280,11 +289,18 @@ class Component implements ComponentInterface
     }
 
     /**
-     * Validate this component and all of its descendants. The result is memoized.
+     * Validate this component and all descendants, memoized within the active scope.
      */
     final public function validate(): ValidationResult
     {
-        return $this->validationResult ??= (new ComponentValidator)->validate($this);
+        $manager = Components::getFacadeRoot();
+
+        if ($this->validationResult === null || $this->validationManager?->get() !== $manager) {
+            $this->validationResult = $manager->validate($this);
+            $this->validationManager = WeakReference::create($manager);
+        }
+
+        return $this->validationResult;
     }
 
     /**
@@ -299,12 +315,12 @@ class Component implements ComponentInterface
 
     final public function normalize(): array
     {
-        return (new ComponentNormalizer)->normalize($this);
+        return Components::normalize($this);
     }
 
     final public function tree(): ComponentTree
     {
-        return new ComponentTree($this);
+        return Components::tree($this);
     }
 
     /**
@@ -362,6 +378,7 @@ class Component implements ComponentInterface
     final public function __clone()
     {
         $this->validationResult = null;
+        $this->validationManager = null;
     }
 
     /**

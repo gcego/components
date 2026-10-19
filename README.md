@@ -1,6 +1,6 @@
 # gcego/components
 
-The framework-independent foundation of **GCEGO Admin Studio**: a declarative,
+The Laravel component foundation of **GCEGO Admin Studio**: a declarative,
 strongly validated, immutable PHP component model.
 
 Framework authors define a component once: its properties, defaults, allowed
@@ -8,25 +8,28 @@ children and shorthand. Application developers then declare only what they need:
 
 ```php
 use Gcego\Components\Component;
-use Gcego\Components\Property;
+use Gcego\Components\Facades\Components;
+use Gcego\Components\Properties\Property;
 
-return new Component(
+return Components::make(items: [
     new Property(Component::Name, 'dashboard'),
     new Property(Component::Label, 'Dashboard'),
 
     new Component(new Property(Component::Name, 'statistics')),
     new Component(new Property(Component::Name, 'activity')),
-);
+]);
 ```
 
-The package is pure PHP. It does not depend on Laravel, Livewire, Blade,
-Alpine.js, Tailwind CSS or Eloquent. Rendering, registration and styling
-belong to the packages built on top of it.
+`ComponentServiceProvider` is the required initialization and discovery point.
+It registers the manager, factories, validation, normalization, traversal and
+inspection services in Laravel's container. Component convenience methods use
+those same services. Rendering and styling belong to the packages built on top.
 
 ## Requirements
 
 - PHP 8.3 or later
-- No runtime Composer dependencies
+- Laravel 12 or 13 with `ComponentServiceProvider` registered
+- Illuminate Container, Contracts and Support (installed by Composer)
 
 ## Installation
 
@@ -47,13 +50,23 @@ Inside the GCEGO monorepo, add a path repository to the consuming `composer.json
 }
 ```
 
+## Laravel integration
+
+Laravel discovers `Gcego\Components\ComponentServiceProvider` automatically.
+The provider is mandatory. It registers a scoped manager, shared stateless
+services and transient builders and trees, preserving application overrides.
+Use `Gcego\Components\Facades\Components` for component creation and operations.
+Laravel also discovers the `Components` facade alias. See
+[Laravel integration](docs/laravel.md) for registration, facade usage, namespace
+migration, customization and test setup.
+
 ## A concrete component in 20 lines
 
 ```php
 use Gcego\Components\Component;
-use Gcego\Components\ComponentDefinition;
-use Gcego\Components\PropertyDefinition;
-use Gcego\Components\Type;
+use Gcego\Components\Schema\ComponentDefinition;
+use Gcego\Components\Schema\PropertyDefinition;
+use Gcego\Components\Schema\Type;
 
 final class Text extends Component
 {
@@ -118,6 +131,8 @@ Path: name
 | [Validation](docs/validation.md) | Collected and strict validation, error codes |
 | [Normalization](docs/normalization.md) | The canonical output format |
 | [Extension guide](docs/extension-guide.md) | Building packages on top of this one |
+| [Security model](docs/security.md) | Input boundaries, limits and release checks |
+| [Laravel integration](docs/laravel.md) | Discovery, container services and overrides |
 | [API reference](docs/api-reference.md) | Every public class and method |
 
 ## Development

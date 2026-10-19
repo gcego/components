@@ -4,10 +4,11 @@ declare(strict_types=1);
 
 namespace Gcego\Components\Validation;
 
-use Gcego\Components\ComponentDefinition;
-use Gcego\Components\PropertyDefinition;
+use Gcego\Components\Facades\Components;
+use Gcego\Components\Schema\ComponentDefinition;
+use Gcego\Components\Schema\PropertyDefinition;
 use Gcego\Components\Support\ValueDescriber;
-use Gcego\Components\TreeNode;
+use Gcego\Components\Trees\TreeNode;
 
 /**
  * Validates the properties of one component occurrence against its definition.
@@ -18,6 +19,11 @@ use Gcego\Components\TreeNode;
 final class PropertyValidator
 {
     private const int MaxSuggestionDistance = 2;
+
+    public function __construct()
+    {
+        Components::getFacadeRoot();
+    }
 
     /**
      * @return list<ValidationError>

@@ -4,7 +4,7 @@
 
 ```php
 use Gcego\Components\Component;
-use Gcego\Components\Property;
+use Gcego\Components\Properties\Property;
 
 $component = new Component(
     new Property(Component::Name, 'example'),

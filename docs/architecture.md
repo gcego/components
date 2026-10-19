@@ -12,46 +12,40 @@
    values only.
 3. **Immutable definitions.** Every value object is `readonly`, collections are
    immutable, and components change only through copy methods.
-4. **Explicit over magic.** Items are classified by interface, not by namespace
-   or naming conventions. No reflection is used at runtime, and constructors are
-   never invoked during validation.
-5. **Pure PHP.** Zero runtime dependencies.
+4. **Explicit contracts.** Items are classified by interface, not by namespace
+   or naming conventions. Constructors are never invoked during validation.
+5. **Provider-owned initialization.** `ComponentServiceProvider` registers every
+   runtime service and factory. The `Components` facade resolves the registered manager for
+   package operations; Illuminate is a required runtime dependency.
 
 ## Class map
 
 ```text
 Gcego\Components
-├── Component                  base class every component extends
-├── Property                   one immutable key/value
-├── PropertyDefinition         schema for one property
-├── Type / TypeKind            accepted type of a property value
-├── ComponentDefinition        schema for one component class
-├── PropertyCollection         explicit properties, keyed and ordered
-├── ComponentCollection        ordered child components
-├── ConfigurationCollection    ordered configuration nodes
-├── ComponentTree              lazily indexed tree of occurrences
-├── ComponentPath              deterministic occurrence path
-├── TreeNode                   one occurrence: component + path + depth
-├── Contracts\                 ComponentInterface, PropertyAware, HasChildren,
-│                              Validatable, Normalizable, ConfigurationNode,
-│                              ValueObject, RuntimeValue
-├── Validation\                ComponentValidator, PropertyValidator,
-│                              ChildValidator, ValidationResult,
-│                              ValidationError, ErrorCode
+├── Component                  base declaration type
+├── Facades\                   Components facade
+├── ComponentServiceProvider   required discovery and service registration
+├── ComponentManager           facade-backed orchestration and factories
+├── Properties\                immutable Property value
+├── Schema\                    ComponentDefinition, PropertyDefinition, Type, TypeKind
+├── Collections\               PropertyCollection, ComponentCollection, ConfigurationCollection
+├── Trees\                     ComponentTree, ComponentPath, TreeNode
+├── Contracts\                 component, configuration, builder and value contracts
+├── Building\                  ComponentBuilder
+├── Validation\                validators, results, errors and error codes
 ├── Normalization\             ComponentNormalizer, RuntimePlaceholder
 ├── Inspection\                ComponentInspector, ComponentInspection
-├── Traversal\                 ComponentWalker, TraversalOrder, Visit
-├── Support\                   ConstructorArguments, ParsedArguments,
-│                              ComponentIdentity, ValueDescriber, Absent
-└── Exceptions\                ComponentException (interface) and subclasses
+├── Traversal\                 ComponentWalker, TraversalOrder, Visit, AncestorChain
+├── Support\                   argument parsing, identity, diagnostics and snapshots
+└── Exceptions\                ComponentException and package exceptions
 ```
 
 ### Deviations from the original package plan
 
-- **`Support\ComponentFactory` was not created.** Construction already happens
-  through ordinary constructors. A factory would add a second way to build
-  components without adding capability. Shorthand parsing lives in
-  `Support\ConstructorArguments`.
+- **Construction uses `ComponentManager`.** The `Components` facade
+  exposes the provider-owned manager. Builders and trees resolve through transient
+  container bindings; immutable values and schemas use ordinary constructors.
+  Shorthand parsing lives in `Support\ConstructorArguments`.
 - **Added `Type`/`TypeKind`.** Union, enum and class-string types need a typed
   descriptor. Parsing type strings such as `"int|string"` would be error-prone.
 - **Added `ConfigurationCollection` and the `ConfigurationNode` contract.** These
@@ -83,11 +77,21 @@ Additional rules:
 - A duplicate key, including a shorthand value that collides with an explicit
   `Property`, throws `DuplicatePropertyException`.
 
+## Initialization
+
+Laravel discovers `ComponentServiceProvider` through Composer metadata. Its
+`ComponentManager` binding is required before component construction, schema
+access or runtime operations. No component method constructs independent runtime
+services. Validation, normalization, inspection and trees resolve the provider's
+services through the `Components` facade, and their dependency constructors have
+no service defaults. The facade application is initialized by Laravel; tests clear
+resolved facade instances when switching application containers.
+
 ## Lifecycle
 
 ```text
 new X(...)          structural checks: item kinds, key syntax, value safety, duplicates
-X::definition()     schema built once per class by X::defineSchema(), then cached
+X::definition()     schema built per class and cached within the active Laravel scope
 $x->validate()      schema checks over the whole tree, all errors collected with paths
 $x->assertValid()   the same checks, throwing InvalidComponentException
 $x->normalize()     canonical array for registries and runtimes
@@ -101,8 +105,9 @@ Schema validation is deliberately **not** run in constructors:
 - `with*()` copies would otherwise have to re-validate at every step.
 
 Runtimes and registries must call `assertValid()` (or `validate()`) before
-using a definition. `Component::validate()` memoizes its result per instance.
-This is safe because instances are immutable.
+using a definition. `Component::validate()` memoizes its result per instance and
+active manager scope. A weak reference prevents the validation cache from keeping
+a previous manager and its request context alive.
 
 ## Immutability policy
 
@@ -115,9 +120,9 @@ This is safe because instances are immutable.
   inside the `final` copy methods `withProperty()`, `withoutProperty()`,
   `withChildren()`, `withAppendedChildren()` and `withConfigurations()`. These
   return `static`, so copies keep the concrete subclass. `__clone()` is `final`
-  and resets the memoized validation result.
+  and resets the memoized validation result and its weak scope reference.
 - Shallow cloning is safe because everything a component holds is immutable:
-  - arrays are copied by value;
+  - validated arrays are recursively copied to detach PHP references;
   - enum cases are singletons;
   - object property values must implement `ValueObject` (an immutable value) or
     `RuntimeValue` (opaque, never inspected).
@@ -135,8 +140,9 @@ Three identities are kept apart:
 | occurrence | the deterministic `ComponentPath` | one position in one tree |
 
 `TreeNode::identity()` returns a `ComponentIdentity` holding all three. Its
-`stableKey()` prefers the explicit id and falls back to the path. No random ids
-are generated.
+`stableKey()` returns `id:<explicit-id>` when an id is present, otherwise
+`path:<occurrence-path>`. These namespaces prevent ids from colliding with paths.
+No random ids are generated.
 
 ## Reuse and cycles
 
@@ -153,11 +159,13 @@ and nesting deeper than `ComponentWalker::DefaultMaxDepth` (256) is rejected.
 
 ## Performance
 
-- Definitions are built once per class.
+- Definitions are built once per class within the active Laravel scope.
 - Property lookup is a single array access.
 - Traversal is lazy and iterative. Paths and ancestor chains share their parents,
   so memory per node is constant.
-- No reflection or framework bootstrapping happens at runtime.
+- Laravel discovers the provider once; the manager and schema cache are scoped
+  to the current request or job. Stateless runtime services are shared, while
+  builders and root-specific trees are created afresh.
 
 `composer benchmark` builds a 201-component page and times construction,
 lookup, traversal, validation and normalization.

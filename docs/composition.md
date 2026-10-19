@@ -108,7 +108,7 @@ use Gcego\Components\Traversal\ComponentWalker;
 use Gcego\Components\Traversal\TraversalOrder;
 use Gcego\Components\Traversal\Visit;
 
-$walker = new ComponentWalker; // or new ComponentWalker(maxDepth: 64)
+$walker = app(ComponentWalker::class); // uses provider configuration
 
 foreach ($walker->preOrder($root) as $node) {}
 foreach ($walker->postOrder($root) as $node) {}

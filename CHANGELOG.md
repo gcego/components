@@ -5,7 +5,43 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Keep `ComponentManager` and `ComponentServiceProvider` at the package root; group collections, schemas, properties and trees in responsibility folders. Update consumer imports as described in the namespace migration guide.
+- Replace the manual `ComponentManager::instance()` resolver with the Laravel `Components` facade.
+
+- Illuminate Container, Contracts and Support are required runtime dependencies.
+- Component construction, schema access and runtime services require provider registration. Missing registration raises an actionable package exception.
+- Component convenience methods resolve provider services. Service constructors require injected dependencies instead of constructing default services.
+
+### Fixed
+
+- Isolate schema definitions and validation caches by Laravel request/job scope; release captured request context and reject inactive managers.
+- Keep runtime property values opaque even when property normalizers are configured, and normalize defaults in direct schema array exports.
+- Remove anonymous-class source paths from exported class metadata, type descriptions and validation diagnostics.
+- Redact manager container contents in debug output and reject manager serialization.
+
+- Reject invalid, abstract or mismatched component builders before returning them, and verify the resulting component class.
+- Bound recursive builder item nesting and stream iterable items without losing repeated keys.
+- Resolve facade managers from the active application container rather than retaining a second application-level cache.
+- Exclude local environment and developer artifacts from release archives while retaining documentation.
+
+- Detach PHP references from property arrays, schema defaults, type lists, constraints and allowed values.
+- Namespace stable state keys as `id:…` and `path:…` to prevent collisions. Consumers persisting the old keys must migrate or clear that state.
+- Normalize object defaults in included schemas and always treat runtime values as opaque, including objects implementing both value contracts.
+- Reject trailing newlines in identifiers and traversal path segments.
+- Remove the implicit mbstring dependency from diagnostic formatting.
+- Preserve iterable components, builders and configuration nodes before flattening ordinary iterables.
+- Apply property normalizers consistently in inspection snapshots and normalized output.
+
 ### Added
+
+- `Facades\Components`, with package-discovered `Components` alias, typed facade root and provider registration checks.
+
+- Required deferred `ComponentServiceProvider` with Laravel package discovery, shared runtime services, transient builders/trees and support for application overrides.
+- `ComponentManager` as the provider-owned entry point for construction, validation, normalization, inspection and trees.
+- `ComponentBuilder::instantiate()` and `buildItems()` hooks for explicit custom constructor adapters, with documentation and regression coverage.
+- `ComponentNormalizer::normalizeProperties()` as the shared property normalization pipeline.
 
 - A string-backed enum case given to a property that takes strings, but not that enum, is stored as its value (`new Property(Resource::Icon, Heroicon::Home)` holds `"heroicon:home"`). Properties typed for the enum keep the case, and unit enums are unchanged.
 - `Contracts\PlacementConfiguration`: configuration nodes that tell a component's parent how to place it (a grid column span). Every component accepts them, whatever its allowed configuration nodes.

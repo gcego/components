@@ -10,14 +10,22 @@ declare(strict_types=1);
  */
 
 use Gcego\Components\Component;
-use Gcego\Components\Property;
+use Gcego\Components\ComponentServiceProvider;
+use Gcego\Components\Properties\Property;
 use Gcego\Components\Tests\Fixtures\ExampleComponent;
 use Gcego\Components\Tests\Fixtures\FakeModel;
 use Gcego\Components\Tests\Fixtures\ParentComponent;
 use Gcego\Components\Traversal\ComponentWalker;
 use Gcego\Components\Validation\ComponentValidator;
+use Illuminate\Container\Container;
+use Illuminate\Foundation\Application;
+use Illuminate\Support\Facades\Facade;
 
 require __DIR__.'/../vendor/autoload.php';
+
+$app = new Application(dirname(__DIR__));
+Facade::setFacadeApplication($app);
+$app->register(ComponentServiceProvider::class);
 
 $sections = max(1, (int) ($argv[1] ?? 50));
 $fieldsPerSection = max(1, min(3, (int) ($argv[2] ?? 3)));
@@ -55,8 +63,8 @@ $measure = static function (string $label, Closure $operation) use ($iterations)
 
 $tree = $build();
 $nodeCount = $tree->tree()->count();
-$walker = new ComponentWalker;
-$validator = new ComponentValidator;
+$walker = Container::getInstance()->make(ComponentWalker::class);
+$validator = Container::getInstance()->make(ComponentValidator::class);
 
 printf("Tree: %d components, %d iterations, PHP %s\n\n", $nodeCount, $iterations, PHP_VERSION);
 
