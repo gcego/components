@@ -141,3 +141,23 @@ it('keeps explicit ids distinct from identical occurrence paths in state keys', 
         ->and($keys)->toBe(['path:root', 'path:root.a', 'id:root.a'])
         ->and(array_unique($keys))->toHaveCount(3);
 });
+
+it('rejects foreign tree nodes even when their paths match', function (): void {
+    $tree = sampleTree()->tree();
+    $foreign = sampleTree()->tree()->find('dashboard.statistics');
+
+    expect($foreign)->not->toBeNull()
+        ->and($tree->parentOf($foreign))->toBeNull()
+        ->and($tree->childrenOf($foreign))->toBe([])
+        ->and($tree->descendantCount($foreign))->toBe(0);
+});
+
+it('resolves matching component occurrences to canonical tree metadata', function (): void {
+    $tree = sampleTree()->tree();
+    $node = $tree->find('dashboard.statistics');
+    $spoofed = new TreeNode(component: $node->component, path: $node->path, depth: 0, index: 999, parentPath: null);
+
+    expect($tree->parentOf($spoofed))->toBe($tree->rootNode())
+        ->and($tree->childrenOf($spoofed))->toHaveCount(1)
+        ->and($tree->descendantCount($spoofed))->toBe(1);
+});

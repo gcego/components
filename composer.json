@@ -44,6 +44,12 @@
     "scripts": {
         "analyse": "vendor/bin/phpstan analyse",
         "test": "vendor/bin/pest",
+        "check": [
+            "@composer validate --strict",
+            "vendor/bin/pint --test",
+            "vendor/bin/phpstan analyse --debug --no-progress",
+            "@test"
+        ],
         "test-coverage": "vendor/bin/pest --coverage --min=90",
         "format": "vendor/bin/pint",
         "benchmark": "@php benchmarks/run.php"

@@ -5,6 +5,13 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Support extending layout classes with shared name rules in `Layout\NamedComponent`.
+- Add `composer check` as the complete local quality gate.
+
+- Add facade layout schemas, named section/group/item factories, child/components nesting methods and dynamic component collections.
+
 ### Changed
 
 - Keep `ComponentManager` and `ComponentServiceProvider` at the package root; group collections, schemas, properties and trees in responsibility folders. Update consumer imports as described in the namespace migration guide.
@@ -15,6 +22,8 @@ The project follows [Semantic Versioning](https://semver.org/).
 - Component convenience methods resolve provider services. Service constructors require injected dependencies instead of constructing default services.
 
 ### Fixed
+
+- Resolve tree-node relationship queries against the owning tree and publish lazy indexes only after successful traversal.
 
 - Isolate schema definitions and validation caches by Laravel request/job scope; release captured request context and reject inactive managers.
 - Keep runtime property values opaque even when property normalizers are configured, and normalize defaults in direct schema array exports.

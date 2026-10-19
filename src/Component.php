@@ -9,12 +9,16 @@ use Gcego\Components\Building\ComponentBuilder;
 use Gcego\Components\Collections\ComponentCollection;
 use Gcego\Components\Collections\ConfigurationCollection;
 use Gcego\Components\Collections\PropertyCollection;
+use Gcego\Components\Contracts\Buildable;
 use Gcego\Components\Contracts\ComponentInterface;
 use Gcego\Components\Contracts\ConfigurationNode;
 use Gcego\Components\Exceptions\DuplicatePropertyException;
 use Gcego\Components\Exceptions\InvalidComponentException;
 use Gcego\Components\Exceptions\MissingPropertyException;
 use Gcego\Components\Facades\Components;
+use Gcego\Components\Layout\Group;
+use Gcego\Components\Layout\Item;
+use Gcego\Components\Layout\Section;
 use Gcego\Components\Properties\Property;
 use Gcego\Components\Schema\ComponentDefinition;
 use Gcego\Components\Schema\PropertyDefinition;
@@ -109,6 +113,29 @@ class Component implements ComponentInterface
     public static function define(mixed ...$items): ComponentBuilder
     {
         return Components::define(static::class, $items);
+    }
+
+    public static function section(string $name): ComponentBuilder
+    {
+        return Components::define(Section::class, [$name]);
+    }
+
+    public static function group(string $name): ComponentBuilder
+    {
+        return Components::define(Group::class, [$name]);
+    }
+
+    public static function item(string $name): ComponentBuilder
+    {
+        return Components::define(Item::class, [$name]);
+    }
+
+    /**
+     * @param  iterable<ComponentInterface|Buildable|iterable<mixed>|null>  $components
+     */
+    public static function collect(iterable $components): ComponentCollection
+    {
+        return Components::collect($components);
     }
 
     /**

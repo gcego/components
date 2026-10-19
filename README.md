@@ -9,16 +9,32 @@ children and shorthand. Application developers then declare only what they need:
 ```php
 use Gcego\Components\Component;
 use Gcego\Components\Facades\Components;
-use Gcego\Components\Properties\Property;
-
-return Components::make(items: [
-    new Property(Component::Name, 'dashboard'),
-    new Property(Component::Label, 'Dashboard'),
-
-    new Component(new Property(Component::Name, 'statistics')),
-    new Component(new Property(Component::Name, 'activity')),
+return Components::schema([
+    Component::section('dashboard')
+        ->label('Dashboard')
+        ->components([
+            Component::group('metrics')
+                ->child([
+                    Component::item('statistics'),
+                    Component::item('activity'),
+                ]),
+        ]),
 ]);
 ```
+
+| Layer | Method | Purpose |
+| --- | --- | --- |
+| Root | `Components::schema([...])` | Wraps the layout in an immutable schema component. |
+| Section | `Component::section('dashboard')` | Declares a major screen area. |
+| Group | `Component::group('metrics')` | Groups related components. |
+| Nesting | `->components([...])` / `->child([...])` | Appends children in declaration order. |
+| Item | `Component::item('statistics')` | Declares a leaf component; children fail validation. |
+| Collection | `Component::collect($components)` | Builds an iterable of components or builders into an ordered collection; null entries are skipped. |
+
+`schema()` builds the nested builders into components. Call `->assertValid()` to
+check the entire layout, or `->normalize()` for its canonical array. Sections,
+groups and items require non-empty names. Builders remain immutable, and nesting
+methods append children. Collections can be passed to either nesting method.
 
 `ComponentServiceProvider` is the required initialization and discovery point.
 It registers the manager, factories, validation, normalization, traversal and
@@ -93,6 +109,8 @@ final class Text extends Component
 Both declarations below produce the same normalized definition:
 
 ```php
+use Gcego\Components\Properties\Property;
+
 new Text('name', 'Subject Name');
 
 new Text(
@@ -138,6 +156,7 @@ Path: name
 ## Development
 
 ```bash
+composer check          # Composer validation, formatting, static analysis and tests
 composer test           # Pest test suite
 composer analyse        # PHPStan, level max
 composer format         # Laravel Pint

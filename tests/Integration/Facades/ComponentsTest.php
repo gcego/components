@@ -95,3 +95,17 @@ it('resolves the manager from the active registered application without a second
         ->and(Components::getFacadeRoot())->toBe($app->make(ComponentManager::class))
         ->and(Components::make()->normalize())->toHaveKey('schema');
 });
+
+it('requires registration for every layout factory and collection entry point', function (): void {
+    Facade::setFacadeApplication(new Application(dirname(__DIR__, 3)));
+
+    foreach ([
+        static fn () => Components::schema([]),
+        static fn () => Component::collect([]),
+        static fn () => Component::section('dashboard'),
+        static fn () => Component::group('metrics'),
+        static fn () => Component::item('statistics'),
+    ] as $operation) {
+        expect($operation)->toThrow(InvalidConfigurationException::class, 'ComponentServiceProvider must be registered');
+    }
+});

@@ -69,6 +69,15 @@ class InvalidBuilderException extends BadMethodCallException implements Componen
         ));
     }
 
+    public static function invalidChild(string $componentClass, mixed $item): self
+    {
+        return new self(sprintf(
+            '%s cannot nest %s. Child lists accept only components, builders, iterables of children and null entries.',
+            self::basename($componentClass),
+            ValueDescriber::describe($item),
+        ));
+    }
+
     public static function positionalAfterItem(string $componentClass, mixed $value): self
     {
         return new self(sprintf(

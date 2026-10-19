@@ -10,6 +10,7 @@ use Gcego\Components\ComponentManager;
 use Gcego\Components\Contracts\ComponentInterface;
 use Gcego\Components\Exceptions\InvalidConfigurationException;
 use Gcego\Components\Inspection\ComponentInspection;
+use Gcego\Components\Layout\Schema;
 use Gcego\Components\Trees\ComponentTree;
 use Gcego\Components\Validation\ValidationResult;
 use Illuminate\Support\Facades\Facade;
@@ -17,6 +18,8 @@ use Illuminate\Support\Facades\Facade;
 /**
  * @method static ComponentBuilder define(class-string<Component> $component, array<int|string, mixed> $items = [])
  * @method static Component make(class-string<Component> $component = 'Gcego\Components\Component', array<int|string, mixed> $items = [])
+ * @method static Schema schema(iterable<ComponentInterface|\Gcego\Components\Contracts\Buildable|iterable<mixed>|null> $components)
+ * @method static \Gcego\Components\Collections\ComponentCollection collect(iterable<ComponentInterface|\Gcego\Components\Contracts\Buildable|iterable<mixed>|null> $components)
  * @method static ComponentTree tree(ComponentInterface $root)
  * @method static ValidationResult validate(ComponentInterface $root)
  * @method static array<string, mixed> normalize(ComponentInterface $root)
@@ -28,7 +31,7 @@ use Illuminate\Support\Facades\Facade;
 final class Components extends Facade
 {
     /**
-     * The container owns the singleton lifetime; avoid retaining another app's manager.
+     * The container owns the scoped lifetime; avoid retaining another app's manager.
      *
      * @var bool
      */

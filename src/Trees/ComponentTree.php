@@ -200,12 +200,14 @@ final class ComponentTree implements Countable, IteratorAggregate
     {
         if ($this->nodes === null) {
             $nodes = [];
+            $nodesByPath = [];
 
             foreach ($this->walker->preOrder($this->root) as $node) {
                 $nodes[] = $node;
-                $this->nodesByPath[$node->path->toString()] = $node;
+                $nodesByPath[$node->path->toString()] = $node;
             }
 
+            $this->nodesByPath = $nodesByPath;
             $this->nodes = $nodes;
         }
 
@@ -215,6 +217,12 @@ final class ComponentTree implements Countable, IteratorAggregate
 
     private function resolve(string|ComponentPath|TreeNode $node): ?TreeNode
     {
-        return $node instanceof TreeNode ? $node : $this->find($node);
+        if (! $node instanceof TreeNode) {
+            return $this->find($node);
+        }
+
+        $resolved = $this->find($node->path);
+
+        return $resolved !== null && $resolved->component === $node->component ? $resolved : null;
     }
 }

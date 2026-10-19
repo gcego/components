@@ -231,3 +231,24 @@ container bindings target the requested component, and that the result has the
 requested component type. Constructor adapters must preserve that invariant.
 Nested builder item lists are limited to 32 levels; iterable values are streamed
 in order, including entries with repeated keys.
+
+## Fluent method names
+
+Builder methods `schema`, `components`, `child`, `label`, `set`, `forget`, `with`,
+`configure`, `tap`, `when` and `build` are concrete methods. Nesting names append
+children; use `set('child', $value)` or `set('components', $value)` when these are
+property names in your component schema. `label()` uses the same constant/key
+mapping as dynamic property setters and validates values through the schema.
+Static `Component::section()`, `group()` and `item()` always construct the built-in
+layout types; use `YourComponent::define()` to construct your own component class.
+
+## Extending layout components
+
+Extend `Layout\Section`, `Layout\Group`, `Layout\Item` or `Layout\Schema`
+when building a specialized layout node. Sections, groups and items share the
+abstract `Layout\NamedComponent`, which owns their required name and positional
+name shorthand. Start from `parent::defineSchema()` to preserve those rules;
+items also inherit the leaf restriction. Set a distinct type with `withType()`
+and add properties with `withProperties()`. Declare the extension through
+`YourSection::define('dashboard')` and put it inside `Components::schema()`.
+The ordinary custom builder hook, `builderClass()`, works for layout extensions.

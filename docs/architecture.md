@@ -27,6 +27,7 @@ Gcego\Components
 ├── ComponentServiceProvider   required discovery and service registration
 ├── ComponentManager           facade-backed orchestration and factories
 ├── Properties\                immutable Property value
+├── Layout\                    Schema, NamedComponent, Section, Group, Item
 ├── Schema\                    ComponentDefinition, PropertyDefinition, Type, TypeKind
 ├── Collections\               PropertyCollection, ComponentCollection, ConfigurationCollection
 ├── Trees\                     ComponentTree, ComponentPath, TreeNode
@@ -169,3 +170,19 @@ and nesting deeper than `ComponentWalker::DefaultMaxDepth` (256) is rejected.
 
 `composer benchmark` builds a 201-component page and times construction,
 lookup, traversal, validation and normalization.
+
+## Layout API
+
+`Components::schema()` resolves the required provider-backed manager and returns
+an immutable `Layout\Schema` component. Static section/group/item factories
+produce builders for concrete classes under `Layout`; they share the existing
+component contracts, validators, normalizer, inspector and traversal services.
+They introduce no separate registry or process-wide cache. `Component::collect()`
+returns the existing `Collections\ComponentCollection` after building its entries.
+
+Nesting methods accept child components and builders, nested iterables and null
+entries. Properties and configuration nodes belong in `set()`/`with()` and
+`configure()`, respectively; child lists reject them. As with other components,
+schema rules run through `validate()` or `assertValid()`, not during construction.
+Sections and groups accept custom component classes. Their visual roles do not
+impose an additional class hierarchy on consuming packages.

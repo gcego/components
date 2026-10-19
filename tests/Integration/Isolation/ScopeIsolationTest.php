@@ -108,6 +108,8 @@ it('rejects retained managers after application or request scope changes', funct
     foreach ([
         static fn () => $manager->define(Component::class),
         static fn () => $manager->make(),
+        static fn () => $manager->schema([]),
+        static fn () => $manager->collect([]),
         static fn () => $manager->tree($component),
         static fn () => $manager->validate($component),
         static fn () => $manager->normalize($component),

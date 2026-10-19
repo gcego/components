@@ -6,12 +6,15 @@ namespace Gcego\Components;
 
 use Closure;
 use Gcego\Components\Building\ComponentBuilder;
+use Gcego\Components\Collections\ComponentCollection;
+use Gcego\Components\Contracts\Buildable;
 use Gcego\Components\Contracts\ComponentInterface;
 use Gcego\Components\Exceptions\InvalidBuilderException;
 use Gcego\Components\Exceptions\InvalidConfigurationException;
 use Gcego\Components\Facades\Components;
 use Gcego\Components\Inspection\ComponentInspection;
 use Gcego\Components\Inspection\ComponentInspector;
+use Gcego\Components\Layout\Schema;
 use Gcego\Components\Normalization\ComponentNormalizer;
 use Gcego\Components\Schema\ComponentDefinition;
 use Gcego\Components\Trees\ComponentTree;
@@ -75,6 +78,28 @@ final class ComponentManager
         }
 
         return $builder;
+    }
+
+    /**
+     * @param  iterable<ComponentInterface|Buildable|iterable<mixed>|null>  $components
+     */
+    public function schema(iterable $components): Schema
+    {
+        $schema = $this->define(Schema::class)->components($components)->build();
+
+        if (! $schema instanceof Schema) {
+            throw InvalidBuilderException::wrongComponent(Schema::class, $schema::class);
+        }
+
+        return $schema;
+    }
+
+    /**
+     * @param  iterable<ComponentInterface|Buildable|iterable<mixed>|null>  $components
+     */
+    public function collect(iterable $components): ComponentCollection
+    {
+        return $this->schema($components)->children();
     }
 
     /**

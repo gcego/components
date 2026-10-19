@@ -127,11 +127,35 @@ class ComponentBuilder implements Buildable
      * Append children: components or their builders (nulls are skipped, so
      * children can be conditional).
      *
-     * @param  iterable<ComponentInterface|Buildable|null>|ComponentInterface|Buildable  $children
+     * @param  iterable<ComponentInterface|Buildable|iterable<mixed>|null>|ComponentInterface|Buildable  $children
      */
     public function schema(iterable|ComponentInterface|Buildable $children): static
     {
-        return $this->with($children);
+        $copy = clone $this;
+        $copy->absorbChildren([$children]);
+
+        return $copy;
+    }
+
+    /**
+     * @param  iterable<ComponentInterface|Buildable|iterable<mixed>|null>|ComponentInterface|Buildable  $children
+     */
+    public function components(iterable|ComponentInterface|Buildable $children): static
+    {
+        return $this->schema($children);
+    }
+
+    /**
+     * @param  iterable<ComponentInterface|Buildable|iterable<mixed>|null>|ComponentInterface|Buildable  $children
+     */
+    public function child(iterable|ComponentInterface|Buildable $children): static
+    {
+        return $this->schema($children);
+    }
+
+    public function label(mixed $label): static
+    {
+        return $this->__call('label', [$label]);
     }
 
     /**
@@ -455,6 +479,33 @@ class ComponentBuilder implements Buildable
                 $this->absorbItems($item, $depth + 1);
             } else {
                 throw InvalidBuilderException::unsupportedItem($this->component, $item);
+            }
+        }
+    }
+
+    /**
+     * Consume child lists without accepting properties or configuration nodes.
+     * Check node contracts before iterables so iterable nodes keep their identity.
+     *
+     * @param  iterable<mixed>  $items
+     */
+    private function absorbChildren(iterable $items, int $depth = 0): void
+    {
+        if ($depth > self::MaxItemDepth) {
+            throw InvalidBuilderException::nestingTooDeep($this->component, self::MaxItemDepth);
+        }
+
+        foreach ($items as $item) {
+            if ($item === null) {
+                continue;
+            }
+
+            if ($item instanceof ComponentInterface || $item instanceof Buildable) {
+                $this->children[] = $item;
+            } elseif (! $item instanceof Property && ! $item instanceof ConfigurationNode && is_iterable($item)) {
+                $this->absorbChildren($item, $depth + 1);
+            } else {
+                throw InvalidBuilderException::invalidChild($this->component, $item);
             }
         }
     }

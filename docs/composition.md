@@ -1,5 +1,29 @@
 # Composition
 
+## Layout schemas
+
+```php
+use Gcego\Components\Component;
+use Gcego\Components\Facades\Components;
+
+$items = Component::collect([
+    Component::item('statistics'),
+    Component::item('activity'),
+]);
+
+$layout = Components::schema([
+    Component::section('dashboard')->label('Dashboard')->components([
+        Component::group('metrics')->child($items),
+    ]),
+])->assertValid();
+```
+
+The schema is the root component. Sections describe major areas, groups collect
+related components, and items are leaves. Names are required and non-empty.
+`components()` and `child()` append children; both return new builders.
+`collect()` consumes iterables, builds child builders, skips null entries and
+preserves declaration order. `normalize()` and `tree()` work on the schema root.
+
 ## Children
 
 ```php

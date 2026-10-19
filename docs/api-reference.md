@@ -10,6 +10,8 @@ All classes live under `Gcego\Components`.
 | `const IdPattern` | `/\A[A-Za-z][A-Za-z0-9_.:\-]*\z/` |
 | `__construct(mixed ...$items)` | properties, children, configuration nodes, and leading shorthand values |
 | `static define(mixed ...$items): ComponentBuilder` | start an immutable fluent builder |
+| `static section(string $name)`, `group(string $name)`, `item(string $name): ComponentBuilder` | named layout builders; items disallow children |
+| `static collect(iterable $components): ComponentCollection` | builds dynamic component lists, skipping null entries |
 | `static builderClass(): class-string<ComponentBuilder>` | override to choose a custom builder |
 | `static definition(): ComponentDefinition` | cached schema (final) |
 | `protected static defineSchema(): ComponentDefinition` | override to declare the schema |
@@ -30,7 +32,7 @@ All classes live under `Gcego\Components`.
 ## `Facades\Components`
 
 Laravel facade for `ComponentManager`, discovered as the `Components`
-alias. Static methods: `define()`, `make()`, `tree()`, `validate()`, `normalize()`
+alias. Static methods: `define()`, `make()`, `schema()`, `collect()`, `tree()`, `validate()`, `normalize()`
 `inspect()` and `normalizeValue()`. `getFacadeRoot(): ComponentManager` returns the registered
 manager and fails clearly when Laravel facades or the provider are not initialized.
 
@@ -41,6 +43,7 @@ constructor injection. Managers from inactive applications or scopes reject use.
 Debug output hides the container, and native manager serialization is rejected. Methods:
 `define(class-string<Component>, array $items = []): ComponentBuilder`,
 `make(class-string<Component> $component = Component::class, array $items = []): Component`,
+`schema(iterable $components): Layout\Schema`, `collect(iterable $components): ComponentCollection`,
 `tree(ComponentInterface): ComponentTree`, `validate(ComponentInterface): ValidationResult`,
 `normalize(ComponentInterface): array`, `normalizeValue(mixed, string $location = 'value'): mixed`,
 `inspect(ComponentInterface): ComponentInspection`.
@@ -156,3 +159,22 @@ node's own errors.
 | `ConfigurationNode` | non-renderable constructor item (extends `Normalizable`) |
 | `ValueObject` | immutable object property value (extends `Normalizable`) |
 | `RuntimeValue` | opaque runtime-only property value (marker) |
+
+## Layout declarations
+
+`Layout\Schema`, `Layout\Section`, `Layout\Group` and `Layout\Item` are
+extendable concrete components with type identifiers `schema`, `section`, `group` and `item`.
+The facade's `schema()` builds a schema root. Sections, groups and items require
+non-empty names. Items disallow children. Call `assertValid()` for strict validation.
+
+Builder methods `components()` and `child()` append children, like `schema()`;
+all accept components, builders or iterables containing them and conditional null
+entries. `label(mixed $label)` follows the component’s property mapping and validation. Each returns a new builder.
+
+`Layout\NamedComponent` is the abstract base for sections, groups and items.
+It centralizes their required name and shorthand. Extend a concrete layout class
+and call `YourLayout::define()` when creating specialized system components.
+
+Tree relationship methods resolve `TreeNode` arguments by path and component
+identity against their own index. Nodes for unrelated components return null,
+an empty child list or zero descendants, as appropriate.
