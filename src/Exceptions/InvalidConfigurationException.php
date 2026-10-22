@@ -101,4 +101,30 @@ class InvalidConfigurationException extends InvalidArgumentException implements 
 
         return $position === false ? $class : substr($class, $position + 1);
     }
+
+    /**
+     * @param  class-string  $componentClass
+     */
+    public static function declarativeOnly(string $componentClass, string $attempted): self
+    {
+        return new self(sprintf(
+            '%s is declared only through %s::make() with typed definitions, for example %s::make(Label::make(\'Save\')); %s is not available.',
+            ValueDescriber::className($componentClass),
+            ValueDescriber::className($componentClass),
+            ValueDescriber::className($componentClass),
+            $attempted,
+        ));
+    }
+
+    /**
+     * @param  class-string  $componentClass
+     */
+    public static function invalidDefaults(string $componentClass, mixed $value): self
+    {
+        return new self(sprintf(
+            'configureUsing() callbacks for %s must return a Definition or a list of definitions, %s returned.',
+            ValueDescriber::className($componentClass),
+            ValueDescriber::describe($value),
+        ));
+    }
 }

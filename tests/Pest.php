@@ -11,10 +11,9 @@ pest()->beforeEach(function (): void {
     $app = new Application(dirname(__DIR__));
     Facade::clearResolvedInstances();
     Facade::setFacadeApplication($app);
-    $provider = new ComponentServiceProvider($app);
-    $app->addDeferredServices(array_fill_keys($provider->provides(), ComponentServiceProvider::class));
+    $app->register(ComponentServiceProvider::class);
 })->afterEach(function (): void {
     Facade::clearResolvedInstances();
     Facade::setFacadeApplication(null);
     Container::setInstance(null);
-})->in('Unit', 'Integration');
+})->in('Unit', 'Integration', 'Architecture');

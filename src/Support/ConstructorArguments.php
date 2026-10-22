@@ -4,11 +4,14 @@ declare(strict_types=1);
 
 namespace Gcego\Components\Support;
 
+use Gcego\Components\Component;
 use Gcego\Components\Contracts\Buildable;
 use Gcego\Components\Contracts\ComponentInterface;
 use Gcego\Components\Contracts\ConfigurationNode;
+use Gcego\Components\Contracts\Definition;
 use Gcego\Components\Exceptions\InvalidConfigurationException;
 use Gcego\Components\Properties\Property;
+use Gcego\Components\Validation\DefinitionValidator;
 
 /**
  * Classifies component constructor arguments.
@@ -23,13 +26,15 @@ use Gcego\Components\Properties\Property;
  *     remaining argument must be one of those three kinds.
  *
  * Builders (Buildable) are built and treated as the child they produce.
+ * Typed definitions are checked against the component schema and expanded
+ * into the properties and children they produce.
  *
  * Classification depends only on contracts, never on namespaces or naming.
  */
 final class ConstructorArguments
 {
     /**
-     * @param  class-string  $componentClass
+     * @param  class-string<Component>  $componentClass
      * @param  list<string>  $shorthandKeys
      * @param  array<int|string, mixed>  $arguments
      */
@@ -50,7 +55,19 @@ final class ConstructorArguments
                 $argument = $argument->build();
             }
 
-            if ($argument instanceof Property) {
+            if ($argument instanceof Definition) {
+                foreach (DefinitionValidator::expand($componentClass, $argument) as $item) {
+                    if ($item instanceof Property) {
+                        $properties[] = $item;
+                    } elseif ($item instanceof ConfigurationNode) {
+                        $configurations[] = $item;
+                    } else {
+                        $children[] = $item;
+                    }
+                }
+
+                $acceptsShorthand = false;
+            } elseif ($argument instanceof Property) {
                 $properties[] = $argument;
                 $acceptsShorthand = false;
             } elseif ($argument instanceof ComponentInterface) {

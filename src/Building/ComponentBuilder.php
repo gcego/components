@@ -4,14 +4,21 @@ declare(strict_types=1);
 
 namespace Gcego\Components\Building;
 
+use Closure;
 use Gcego\Components\Component;
 use Gcego\Components\Contracts\Buildable;
 use Gcego\Components\Contracts\ComponentInterface;
 use Gcego\Components\Contracts\ConfigurationNode;
+use Gcego\Components\Contracts\Definition;
+use Gcego\Components\Evaluation\Computed;
 use Gcego\Components\Exceptions\InvalidBuilderException;
 use Gcego\Components\Facades\Components;
+use Gcego\Components\Inspection\ComponentInspection;
 use Gcego\Components\Properties\Property;
 use Gcego\Components\Schema\TypeKind;
+use Gcego\Components\Trees\ComponentTree;
+use Gcego\Components\Validation\DefinitionValidator;
+use Gcego\Components\Validation\ValidationResult;
 
 /**
  * The fluent, definition-time form of a component:
@@ -22,10 +29,13 @@ use Gcego\Components\Schema\TypeKind;
  * set properties (define('active', 'Active', field: 'is_active')), and every
  * unknown method sets the property its name maps to: sortable() sets
  * Text::Sortable, maxLength(100) sets TextInput::MaxLength. A method called
- * without a value turns an on/off property on.
+ * without a value turns an on/off property on. Closures become Computed
+ * values (visible(fn (Get $get): bool => ...)), and registered macros are
+ * resolved before property setters. Catalog components start builders
+ * Filament-style with make().
  *
- * Builders are immutable (every call returns a copy) and are built into the
- * real component when they are placed in a parent, returned from a
+ * Builders are immutable: changes return copies and conditional no-ops may
+ * return the original builder. They are built into the real component when they are placed in a parent, returned from a
  * definition file, or when build() is called. Components with richer
  * configuration ship their own builder (see Component::builderClass()).
  */
@@ -80,6 +90,12 @@ class ComponentBuilder implements Buildable
      */
     public function __call(string $method, array $arguments): static
     {
+        $macro = Components::configurator()->macroFor($this->component, $method);
+
+        if ($macro !== null) {
+            return $this->callMacro($method, $macro, $arguments);
+        }
+
         $key = $this->propertyKey($method);
 
         if ($key === null) {
@@ -107,7 +123,78 @@ class ComponentBuilder implements Buildable
     public function set(string $key, mixed $value): static
     {
         $copy = clone $this;
-        $copy->properties[$key] = new Property($key, $value);
+        $copy->properties[$key] = self::property($key, $value);
+
+        return $copy;
+    }
+
+    /**
+     * Merge explicit properties; later duplicate keys replace earlier values.
+     *
+     * @param  iterable<string, mixed>  $properties
+     */
+    public function setMany(iterable $properties): static
+    {
+        $copy = clone $this;
+
+        foreach ($properties as $key => $value) {
+            if (! is_string($key)) {
+                throw InvalidBuilderException::invalidValue($this->component, 'setMany', 'Property keys must be strings.');
+            }
+
+            $copy->properties[$key] = self::property($key, $value);
+        }
+
+        return $copy;
+    }
+
+    /** Explicit null counts as a value; schema defaults do not count as explicit properties. */
+    public function setIfMissing(string $key, mixed $value): static
+    {
+        return $this->has($key) ? $this : $this->set($key, $value);
+    }
+
+    /** Read an explicit value without building children or resolving schema defaults. */
+    public function get(string $key, mixed $fallback = null): mixed
+    {
+        return $this->propertyValue($key, $fallback);
+    }
+
+    public function has(string $key): bool
+    {
+        return $this->hasPropertyValue($key);
+    }
+
+    /** @return array<string, mixed> */
+    public function properties(): array
+    {
+        $values = [];
+
+        foreach ($this->properties as $key => $property) {
+            $values[$key] = $property->value;
+        }
+
+        return $values;
+    }
+
+    public function clearProperties(): static
+    {
+        $copy = clone $this;
+        $copy->properties = [];
+
+        return $copy;
+    }
+
+    /** @param iterable<string, mixed> $properties */
+    public function replaceProperties(iterable $properties): static
+    {
+        return $this->clearProperties()->setMany($properties);
+    }
+
+    public function onlyProperties(string ...$keys): static
+    {
+        $copy = clone $this;
+        $copy->properties = array_intersect_key($this->properties, array_fill_keys($keys, true));
 
         return $copy;
     }
@@ -132,7 +219,7 @@ class ComponentBuilder implements Buildable
     public function schema(iterable|ComponentInterface|Buildable $children): static
     {
         $copy = clone $this;
-        $copy->absorbChildren([$children]);
+        $copy->absorbItems([$children], childrenOnly: true);
 
         return $copy;
     }
@@ -153,14 +240,130 @@ class ComponentBuilder implements Buildable
         return $this->schema($children);
     }
 
+    /** @param iterable<ComponentInterface|Buildable|iterable<mixed>|null>|ComponentInterface|Buildable $children */
+    public function replaceChildren(iterable|ComponentInterface|Buildable $children): static
+    {
+        return $this->clearChildren()->schema($children);
+    }
+
+    /** @param iterable<ComponentInterface|Buildable|iterable<mixed>|null>|ComponentInterface|Buildable $children */
+    public function prependChildren(iterable|ComponentInterface|Buildable $children): static
+    {
+        $copy = $this->clearChildren()->schema($children);
+        array_push($copy->children, ...$this->children);
+
+        return $copy;
+    }
+
+    public function clearChildren(): static
+    {
+        $copy = clone $this;
+        $copy->children = [];
+
+        return $copy;
+    }
+
+    /**
+     * Child builders remain unbuilt until build() is called.
+     *
+     * @return list<ComponentInterface|Buildable>
+     */
+    public function children(): array
+    {
+        return $this->children;
+    }
+
+    public function childCount(): int
+    {
+        return count($this->children);
+    }
+
+    /** @param callable(ComponentInterface|Buildable, int): bool $predicate */
+    public function filterChildren(callable $predicate): static
+    {
+        $children = [];
+
+        foreach ($this->children as $index => $child) {
+            if ($predicate($child, $index)) {
+                $children[] = $child;
+            }
+        }
+
+        return $this->withChildItems($children);
+    }
+
+    /** @param callable(ComponentInterface|Buildable, int): (ComponentInterface|Buildable|null) $callback */
+    public function mapChildren(callable $callback): static
+    {
+        $copy = $this->clearChildren();
+
+        foreach ($this->children as $index => $child) {
+            $mapped = $callback($child, $index);
+
+            if ($mapped !== null && ! $mapped instanceof ComponentInterface && ! $mapped instanceof Buildable) {
+                throw InvalidBuilderException::invalidChild($this->component, $mapped);
+            }
+
+            if ($mapped !== null) {
+                $copy->children[] = $mapped;
+            }
+        }
+
+        return $copy;
+    }
+
     public function label(mixed $label): static
     {
         return $this->__call('label', [$label]);
     }
 
     /**
-     * Append any items a constructor would accept: properties, children,
-     * builders and configuration nodes (lists are flattened, nulls skipped).
+     * Span every column of the parent grid.
+     */
+    public function columnSpanFull(): static
+    {
+        return $this->__call('columnSpan', ['full']);
+    }
+
+    /**
+     * Hide the component during the given operations (create, edit, view, ...).
+     *
+     * @param  string|list<string>  ...$operations
+     */
+    public function hiddenOn(string|array ...$operations): static
+    {
+        return $this->__call('hiddenOn', [self::operations($operations)]);
+    }
+
+    /**
+     * Show the component only during the given operations.
+     *
+     * @param  string|list<string>  ...$operations
+     */
+    public function visibleOn(string|array ...$operations): static
+    {
+        return $this->__call('visibleOn', [self::operations($operations)]);
+    }
+
+    /**
+     * Set extra HTML attributes, or merge them into the ones already set.
+     *
+     * @param  array<string, scalar|null>|Closure  $attributes
+     */
+    public function extraAttributes(array|Closure $attributes, bool $merge = false): static
+    {
+        $current = $this->propertyValue('extraAttributes');
+
+        if ($merge && is_array($attributes) && is_array($current)) {
+            $attributes = [...$current, ...$attributes];
+        }
+
+        return $this->__call('extraAttributes', [$attributes]);
+    }
+
+    /**
+     * Append any items a constructor would accept: typed definitions, properties,
+     * children, builders and configuration nodes (lists are flattened, nulls skipped).
      */
     public function with(mixed ...$items): static
     {
@@ -176,9 +379,25 @@ class ComponentBuilder implements Buildable
     public function configure(ConfigurationNode ...$configurations): static
     {
         $copy = clone $this;
-        array_push($copy->configurations, ...$configurations);
+
+        foreach ($configurations as $configuration) {
+            $copy->configurations[] = $configuration;
+        }
 
         return $copy;
+    }
+
+    public function replaceConfigurations(ConfigurationNode ...$configurations): static
+    {
+        $copy = clone $this;
+        $copy->configurations = array_values($configurations);
+
+        return $copy;
+    }
+
+    public function clearConfigurations(): static
+    {
+        return $this->replaceConfigurations();
     }
 
     /**
@@ -196,10 +415,66 @@ class ComponentBuilder implements Buildable
      * Apply the callback only when the condition holds.
      *
      * @param  callable(static): static  $callback
+     * @param  (callable(static): static)|null  $otherwise
      */
-    public function when(bool $condition, callable $callback): static
+    public function when(bool $condition, callable $callback, ?callable $otherwise = null): static
     {
-        return $condition ? $callback($this) : $this;
+        if ($condition) {
+            return $callback($this);
+        }
+
+        return $otherwise === null ? $this : $otherwise($this);
+    }
+
+    /**
+     * @param  callable(static): static  $callback
+     * @param  (callable(static): static)|null  $otherwise
+     */
+    public function unless(bool $condition, callable $callback, ?callable $otherwise = null): static
+    {
+        return $this->when(! $condition, $callback, $otherwise);
+    }
+
+    /**
+     * Compose reusable immutable builder transformations in order.
+     *
+     * @param  iterable<callable(static): static>  $callbacks
+     */
+    public function apply(iterable $callbacks): static
+    {
+        $builder = $this;
+
+        foreach ($callbacks as $callback) {
+            $builder = $builder->tap($callback);
+        }
+
+        return $builder;
+    }
+
+    public function buildValidated(): Component
+    {
+        return $this->build()->assertValid();
+    }
+
+    public function validate(): ValidationResult
+    {
+        return $this->build()->validate();
+    }
+
+    /** @return array<string, mixed> */
+    public function normalize(): array
+    {
+        return $this->build()->normalize();
+    }
+
+    public function tree(): ComponentTree
+    {
+        return $this->build()->tree();
+    }
+
+    public function inspect(): ComponentInspection
+    {
+        return Components::inspect($this->build());
     }
 
     public function build(): Component
@@ -395,9 +670,54 @@ class ComponentBuilder implements Buildable
             }
         }
 
+        if ($definition->property($method) !== null) {
+            return $method;
+        }
+
         $snake = strtolower((string) preg_replace('/(?<!^)[A-Z]/', '_$0', $method));
 
         return $definition->property($snake) !== null ? $snake : null;
+    }
+
+    /**
+     * Closures become Computed values, evaluated by Component::evaluateProperty().
+     */
+    private static function property(string $key, mixed $value): Property
+    {
+        return new Property($key, $value instanceof Closure ? new Computed($value) : $value);
+    }
+
+    /**
+     * @param  array<int|string, mixed>  $arguments
+     */
+    private function callMacro(string $method, Closure $macro, array $arguments): static
+    {
+        $result = Closure::bind($macro, $this, static::class)(...$arguments);
+
+        if (! $result instanceof static || $result->component !== $this->component) {
+            throw InvalidBuilderException::invalidValue(
+                $this->component,
+                $method,
+                'Macros must return the builder, because builders are immutable: return $this->required();',
+            );
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param  array<array-key, string|list<string>>  $operations
+     * @return list<string>
+     */
+    private static function operations(array $operations): array
+    {
+        $flattened = [];
+
+        foreach ($operations as $operation) {
+            array_push($flattened, ...(is_array($operation) ? array_values($operation) : [$operation]));
+        }
+
+        return $flattened;
     }
 
     private function isSwitch(string $key): bool
@@ -424,7 +744,7 @@ class ComponentBuilder implements Buildable
         foreach ($items as $name => $item) {
             if (is_string($name)) {
                 $key = $this->propertyKey($name) ?? throw InvalidBuilderException::unknownMethod($this->component, $name);
-                $this->properties[$key] = new Property($key, $item);
+                $this->properties[$key] = self::property($key, $item);
                 $positional = false;
 
                 continue;
@@ -446,7 +766,7 @@ class ComponentBuilder implements Buildable
             }
 
             if ($item !== null) {
-                $this->properties[$shorthand[$position]] = new Property($shorthand[$position], $item);
+                $this->properties[$shorthand[$position]] = self::property($shorthand[$position], $item);
             }
 
             $position++;
@@ -456,40 +776,12 @@ class ComponentBuilder implements Buildable
     }
 
     /**
-     * @param  iterable<mixed>  $items
-     */
-    private function absorbItems(iterable $items, int $depth = 0): void
-    {
-        if ($depth > self::MaxItemDepth) {
-            throw InvalidBuilderException::nestingTooDeep($this->component, self::MaxItemDepth);
-        }
-
-        foreach ($items as $item) {
-            if ($item === null) {
-                continue;
-            }
-
-            if ($item instanceof Property) {
-                $this->properties[$item->key] = $item;
-            } elseif ($item instanceof ComponentInterface || $item instanceof Buildable) {
-                $this->children[] = $item;
-            } elseif ($item instanceof ConfigurationNode) {
-                $this->configurations[] = $item;
-            } elseif (is_iterable($item)) {
-                $this->absorbItems($item, $depth + 1);
-            } else {
-                throw InvalidBuilderException::unsupportedItem($this->component, $item);
-            }
-        }
-    }
-
-    /**
-     * Consume child lists without accepting properties or configuration nodes.
-     * Check node contracts before iterables so iterable nodes keep their identity.
+     * Consume nested lists once, checking node contracts before iterable expansion.
+     * Child-only entry points use the same depth and identity rules as mixed items.
      *
      * @param  iterable<mixed>  $items
      */
-    private function absorbChildren(iterable $items, int $depth = 0): void
+    private function absorbItems(iterable $items, int $depth = 0, bool $childrenOnly = false): void
     {
         if ($depth > self::MaxItemDepth) {
             throw InvalidBuilderException::nestingTooDeep($this->component, self::MaxItemDepth);
@@ -502,10 +794,18 @@ class ComponentBuilder implements Buildable
 
             if ($item instanceof ComponentInterface || $item instanceof Buildable) {
                 $this->children[] = $item;
-            } elseif (! $item instanceof Property && ! $item instanceof ConfigurationNode && is_iterable($item)) {
-                $this->absorbChildren($item, $depth + 1);
+            } elseif (! $childrenOnly && $item instanceof Definition) {
+                $this->absorbItems(DefinitionValidator::expand($this->component, $item), $depth + 1);
+            } elseif (! $childrenOnly && $item instanceof Property) {
+                $this->properties[$item->key] = $item;
+            } elseif (! $childrenOnly && $item instanceof ConfigurationNode) {
+                $this->configurations[] = $item;
+            } elseif (! self::isItem($item) && is_iterable($item)) {
+                $this->absorbItems($item, $depth + 1, $childrenOnly);
             } else {
-                throw InvalidBuilderException::invalidChild($this->component, $item);
+                throw $childrenOnly
+                    ? InvalidBuilderException::invalidChild($this->component, $item)
+                    : InvalidBuilderException::unsupportedItem($this->component, $item);
             }
         }
     }
@@ -513,6 +813,7 @@ class ComponentBuilder implements Buildable
     private static function isItem(mixed $item): bool
     {
         return $item instanceof Property
+            || $item instanceof Definition
             || $item instanceof ComponentInterface
             || $item instanceof Buildable
             || $item instanceof ConfigurationNode;

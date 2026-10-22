@@ -34,11 +34,12 @@ function sourceFiles(string $packageRoot): array
 it('requires Illuminate runtime dependencies and declares Laravel discovery', function () use ($packageRoot): void {
     $manifest = json_decode((string) file_get_contents($packageRoot.'/composer.json'), true, flags: JSON_THROW_ON_ERROR);
 
-    expect(is_array($manifest) ? $manifest['require'] : null)->toMatchArray([
+    expect(is_array($manifest) ? $manifest['require'] : null)->toBe([
         'php' => '^8.3',
-        'illuminate/container' => '^12.0|^13.0',
-        'illuminate/support' => '^12.0|^13.0',
-        'illuminate/contracts' => '^12.0|^13.0',
+        'gcego/core' => '^1.2',
+        'illuminate/container' => '^13.0',
+        'illuminate/contracts' => '^13.0',
+        'illuminate/support' => '^13.0',
     ])
         ->and(is_array($manifest) ? $manifest['autoload'] : null)->toBe(['psr-4' => ['Gcego\\Components\\' => 'src/']]);
 });
@@ -48,13 +49,29 @@ it('autoloads every source file from its PSR-4 path', function () use ($packageR
         $relative = substr($file, strlen($packageRoot.'/src/'), -4);
         $symbol = 'Gcego\\Components\\'.str_replace('/', '\\', $relative);
 
-        expect(class_exists($symbol) || interface_exists($symbol) || enum_exists($symbol))->toBeTrue($symbol.' is not autoloadable');
+        expect(class_exists($symbol) || interface_exists($symbol) || enum_exists($symbol) || trait_exists($symbol))->toBeTrue($symbol.' is not autoloadable');
     }
 });
 
 it('declares strict types in every source file', function () use ($packageRoot): void {
     foreach (sourceFiles($packageRoot) as $file) {
         expect((string) file_get_contents($file))->toContain('declare(strict_types=1);');
+    }
+});
+
+it('depends on no GCEGO package other than gcego/core', function () use ($packageRoot): void {
+    $manifest = json_decode((string) file_get_contents($packageRoot.'/composer.json'), true, flags: JSON_THROW_ON_ERROR);
+    $gcegoPackages = array_values(array_filter(
+        array_keys([...$manifest['require'], ...$manifest['require-dev']]),
+        static fn (string $package): bool => str_starts_with($package, 'gcego/'),
+    ));
+
+    expect($gcegoPackages)->toBe(['gcego/core']);
+
+    foreach (sourceFiles($packageRoot) as $file) {
+        preg_match_all('/\b(Gcego\\\\[A-Za-z]+)\\\\/', (string) file_get_contents($file), $matches);
+
+        expect(array_diff(array_unique($matches[1]), ['Gcego\\Components', 'Gcego\\Core']))->toBe([], $file.' references another GCEGO package');
     }
 });
 

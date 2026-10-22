@@ -7,6 +7,7 @@ namespace Gcego\Components\Schema;
 use Closure;
 use Gcego\Components\Component;
 use Gcego\Components\Contracts\ComponentInterface;
+use Gcego\Components\Contracts\Concern;
 use Gcego\Components\Contracts\ConfigurationNode;
 use Gcego\Components\Contracts\PlacementConfiguration;
 use Gcego\Components\Exceptions\InvalidConfigurationException;
@@ -203,6 +204,42 @@ final readonly class ComponentDefinition
         }
 
         return $this->copy(['properties' => array_values($merged)]);
+    }
+
+    /**
+     * Add the property definitions of reusable concerns, later ones replacing earlier ones.
+     *
+     * @param  class-string<Concern>  ...$concerns
+     */
+    public function withConcerns(string ...$concerns): self
+    {
+        $properties = [];
+
+        foreach ($concerns as $concern) {
+            if (! is_a($concern, Concern::class, true)) {
+                throw InvalidConfigurationException::invalidDefinition(sprintf('"%s" is not a %s.', $concern, Concern::class));
+            }
+
+            array_push($properties, ...$concern::properties());
+        }
+
+        return $this->withProperties(...$properties);
+    }
+
+    /** @param iterable<Field|PropertyDefinition> $fields */
+    public function withFields(iterable $fields): self
+    {
+        $properties = [];
+
+        foreach ($fields as $field) {
+            if (! $field instanceof Field && ! $field instanceof PropertyDefinition) {
+                throw InvalidConfigurationException::invalidDefinition('Schema fields must be Field builders or PropertyDefinition instances.');
+            }
+
+            $properties[] = $field instanceof Field ? $field->build() : $field;
+        }
+
+        return $this->withProperties(...$properties);
     }
 
     public function withoutProperties(string ...$names): self

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Gcego\Components\Schema;
 
 use Closure;
+use Gcego\Components\Evaluation\Computed;
 use Gcego\Components\Exceptions\InvalidConfigurationException;
 use Gcego\Components\Facades\Components;
 use Gcego\Components\Properties\Property;
@@ -99,6 +100,17 @@ final readonly class PropertyDefinition
         }
 
         $this->default = $this->hasDefault ? ValueSnapshot::copy($default) : null;
+    }
+
+    /**
+     * Whether the property holds a callback (such as afterStateUpdated) that
+     * is invoked by a runtime, rather than a computed value to evaluate.
+     */
+    public function isCallback(): bool
+    {
+        return count($this->types) === 1
+            && $this->types[0]->kind === TypeKind::Instance
+            && $this->types[0]->class === Computed::class;
     }
 
     public function acceptsType(mixed $value): bool
