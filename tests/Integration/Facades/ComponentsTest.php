@@ -5,9 +5,14 @@ declare(strict_types=1);
 use Gcego\Components\Component;
 use Gcego\Components\ComponentManager;
 use Gcego\Components\ComponentServiceProvider;
+use Gcego\Components\Definitions\Name;
 use Gcego\Components\Exceptions\InvalidChildException;
 use Gcego\Components\Exceptions\InvalidConfigurationException;
 use Gcego\Components\Facades\Components;
+use Gcego\Components\Layout\Group;
+use Gcego\Components\Layout\Item;
+use Gcego\Components\Layout\Schema;
+use Gcego\Components\Layout\Section;
 use Gcego\Components\Normalization\ComponentNormalizer;
 use Gcego\Components\Properties\Property;
 use Gcego\Components\Tests\Fixtures\ExampleComponent;
@@ -17,10 +22,8 @@ use Illuminate\Foundation\AliasLoader;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Facade;
 
-it('loads the required provider on the first facade call', function (): void {
+it('resolves the facade from the registered provider', function (): void {
     $app = Container::getInstance();
-
-    expect($app->getLoadedProviders())->not->toHaveKey(ComponentServiceProvider::class);
     $component = Components::make(items: [new Property(Component::Name, 'dashboard')]);
 
     expect($component->name())->toBe('dashboard')
@@ -100,11 +103,11 @@ it('requires registration for every layout factory and collection entry point', 
     Facade::setFacadeApplication(new Application(dirname(__DIR__, 3)));
 
     foreach ([
-        static fn () => Components::schema([]),
+        static fn () => Schema::make(),
         static fn () => Component::collect([]),
-        static fn () => Component::section('dashboard'),
-        static fn () => Component::group('metrics'),
-        static fn () => Component::item('statistics'),
+        static fn () => Section::make(Name::make('dashboard')),
+        static fn () => Group::make(Name::make('metrics')),
+        static fn () => Item::make(Name::make('statistics')),
     ] as $operation) {
         expect($operation)->toThrow(InvalidConfigurationException::class, 'ComponentServiceProvider must be registered');
     }

@@ -3,9 +3,12 @@
 declare(strict_types=1);
 
 use Gcego\Components\Building\ComponentBuilder;
+use Gcego\Components\Catalog\ComponentCatalog;
 use Gcego\Components\Component;
 use Gcego\Components\ComponentManager;
 use Gcego\Components\ComponentServiceProvider;
+use Gcego\Components\Configuration\ComponentConfigurator;
+use Gcego\Components\Evaluation\Evaluator;
 use Gcego\Components\Exceptions\InvalidChildException;
 use Gcego\Components\Exceptions\InvalidConfigurationException;
 use Gcego\Components\Facades\Components;
@@ -19,27 +22,32 @@ use Gcego\Components\Trees\ComponentTree;
 use Gcego\Components\Validation\ChildValidator;
 use Gcego\Components\Validation\ComponentValidator;
 use Gcego\Components\Validation\PropertyValidator;
+use Gcego\Core\Contracts\PackageInterface;
+use Gcego\Core\Gcego;
+use Gcego\Core\GcegoServiceProvider;
+use Gcego\Core\Packages\PackageManager;
+use Illuminate\Config\Repository;
 use Illuminate\Container\Container;
-use Illuminate\Contracts\Support\DeferrableProvider;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\PackageManifest;
 use Illuminate\Foundation\ProviderRepository;
 use Illuminate\Support\Facades\Facade;
 
-it('registers the manager and runtime services as singletons and factories as transients', function (): void {
+it('registers the scoped manager, shared runtime services and transient factories', function (): void {
     $container = Container::getInstance();
     $provider = new ComponentServiceProvider($container);
-    $singletons = [
+    $shared = [
         ComponentManager::class, ComponentWalker::class, PropertyValidator::class,
         ChildValidator::class, ComponentValidator::class, ComponentNormalizer::class, ComponentInspector::class,
+        ComponentConfigurator::class, Evaluator::class,
     ];
 
-    expect($provider)->toBeInstanceOf(DeferrableProvider::class)
-        ->and($provider->isDeferred())->toBeTrue()
-        ->and($provider->provides())->toBe([...$singletons, ComponentBuilder::class, ComponentTree::class]);
+    expect($provider)->toBeInstanceOf(PackageInterface::class)
+        ->and($provider->isDeferred())->toBeFalse()
+        ->and($provider->provides())->toBe([...$shared, ComponentBuilder::class, ComponentTree::class, ComponentCatalog::class]);
 
-    foreach ($singletons as $service) {
+    foreach ($shared as $service) {
         expect($container->bound($service))->toBeTrue()
             ->and($container->make($service))->toBeInstanceOf($service)
             ->and($container->make($service))->toBe($container->make($service));
@@ -115,25 +123,48 @@ it('advertises the required service provider for Laravel package discovery', fun
     expect($manifest['extra']['laravel']['providers'])->toBe([ComponentServiceProvider::class]);
 });
 
-it('loads the required provider lazily through the real Laravel deferred manifest', function (): void {
+it('registers eagerly without building any component service', function (): void {
     $app = Container::getInstance();
 
     expect($app)->toBeInstanceOf(Application::class)
-        ->and($app->isDeferredService(ComponentManager::class))->toBeTrue()
-        ->and($app->bound(ComponentManager::class))->toBeTrue()
-        ->and($app->getBindings())->not->toHaveKey(ComponentManager::class)
-        ->and($app->getLoadedProviders())->not->toHaveKey(ComponentServiceProvider::class);
-
-    $root = new Component;
-
-    expect($app->getLoadedProviders())->toHaveKey(ComponentServiceProvider::class)
-        ->and($app->make(ComponentManager::class))->toBe($app->make(ComponentManager::class));
+        ->and($app->getLoadedProviders())->toHaveKey(ComponentServiceProvider::class)
+        ->and($app->getDeferredServices())->toBe([]);
 
     foreach ((new ComponentServiceProvider($app))->provides() as $service) {
-        expect($app->getBindings())->toHaveKey($service);
+        expect($app->getBindings())->toHaveKey($service)
+            ->and($app->resolved($service))->toBeFalse();
     }
 
-    expect($root->validate()->isValid())->toBeTrue();
+    expect((new Component)->validate()->isValid())->toBeTrue()
+        ->and($app->make(ComponentManager::class))->toBe($app->make(ComponentManager::class));
+});
+
+it('declares gcego/core as its only required GCEGO package', function (): void {
+    $descriptor = (new ComponentServiceProvider(Container::getInstance()))->descriptor();
+
+    expect($descriptor->id)->toBe('gcego/components')
+        ->and($descriptor->requires)->toBe(['gcego/core'])
+        ->and($descriptor->optional)->toBe([])
+        ->and($descriptor->hasCapability('components'))->toBeTrue();
+});
+
+it('is discovered and booted by gcego/core without any other GCEGO package', function (): void {
+    $app = new Application(dirname(__DIR__, 3));
+    $app->instance('config', new Repository(['gcego' => ['auto_boot' => false]]));
+    Facade::clearResolvedInstances();
+    Facade::setFacadeApplication($app);
+    $app->register(GcegoServiceProvider::class);
+    $app->register(ComponentServiceProvider::class);
+    $app->boot();
+
+    $gcego = $app->make(Gcego::class);
+    $gcego->boot();
+    $packages = $app->make(PackageManager::class);
+
+    expect($packages->has('gcego/components'))->toBeTrue()
+        ->and($packages->isBooted('gcego/components'))->toBeTrue()
+        ->and($packages->dependencies('gcego/components', transitive: true))->toBe(['gcego/core'])
+        ->and($gcego->hasCapability('components'))->toBeTrue();
 });
 
 it('preserves instances transient factories and aliases supplied by the application', function (): void {
@@ -165,7 +196,7 @@ it('keeps roots and builder state isolated across factory calls', function (): v
         ->and($manager->define(Component::class)->build()->hasExplicit(Component::Name))->toBeFalse();
 });
 
-it('loads the provider when any advertised service is the first entry point', function (string $service): void {
+it('resolves every advertised service from the registered provider', function (string $service): void {
     $app = Container::getInstance();
     $parameters = match ($service) {
         ComponentBuilder::class => ['component' => Component::class],
@@ -173,13 +204,11 @@ it('loads the provider when any advertised service is the first entry point', fu
         default => [],
     };
 
-    expect($app->getLoadedProviders())->not->toHaveKey(ComponentServiceProvider::class)
-        ->and($app->make($service, $parameters))->toBeInstanceOf($service)
-        ->and($app->getLoadedProviders())->toHaveKey(ComponentServiceProvider::class);
+    expect($app->make($service, $parameters))->toBeInstanceOf($service);
 })->with([
     ComponentManager::class, ComponentWalker::class, PropertyValidator::class,
     ChildValidator::class, ComponentValidator::class, ComponentNormalizer::class,
-    ComponentInspector::class, ComponentBuilder::class, ComponentTree::class,
+    ComponentInspector::class, ComponentBuilder::class, ComponentTree::class, ComponentCatalog::class,
 ]);
 
 it('discovers the provider from Composer package metadata through Laravel manifests', function (): void {
@@ -201,9 +230,9 @@ it('discovers the provider from Composer package metadata through Laravel manife
 
         expect($manifest->providers())->toBe([ComponentServiceProvider::class])
             ->and($manifest->aliases())->toBe(['Components' => Components::class])
-            ->and($app->getLoadedProviders())->not->toHaveKey(ComponentServiceProvider::class)
-            ->and(Components::getFacadeRoot()->make()->validate()->isValid())->toBeTrue()
-            ->and($app->getLoadedProviders())->toHaveKey(ComponentServiceProvider::class);
+            ->and($app->getLoadedProviders())->toHaveKey(ComponentServiceProvider::class)
+            ->and($app->getDeferredServices())->toBe([])
+            ->and(Components::getFacadeRoot()->make()->validate()->isValid())->toBeTrue();
     } finally {
         $files->deleteDirectory($directory);
     }

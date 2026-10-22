@@ -8,3 +8,7 @@ phpunit.xml
 phpstan.neon
 /.idea
 /.vscode
+/tests
+/README.md
+/docs
+/examples

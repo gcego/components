@@ -6,17 +6,26 @@ namespace Gcego\Components;
 
 use Closure;
 use Gcego\Components\Building\ComponentBuilder;
+use Gcego\Components\Catalog\ComponentCatalog;
 use Gcego\Components\Collections\ComponentCollection;
+use Gcego\Components\Configuration\ComponentConfigurator;
 use Gcego\Components\Contracts\Buildable;
 use Gcego\Components\Contracts\ComponentInterface;
+use Gcego\Components\Contracts\DeclarativeComponent;
+use Gcego\Components\Evaluation\EvaluationContext;
+use Gcego\Components\Evaluation\Evaluator;
+use Gcego\Components\Evaluation\State;
 use Gcego\Components\Exceptions\InvalidBuilderException;
 use Gcego\Components\Exceptions\InvalidConfigurationException;
 use Gcego\Components\Facades\Components;
 use Gcego\Components\Inspection\ComponentInspection;
 use Gcego\Components\Inspection\ComponentInspector;
 use Gcego\Components\Layout\Schema;
+use Gcego\Components\Live\LiveSchema;
 use Gcego\Components\Normalization\ComponentNormalizer;
+use Gcego\Components\Patching\SchemaPatch;
 use Gcego\Components\Schema\ComponentDefinition;
+use Gcego\Components\Traversal\ComponentWalker;
 use Gcego\Components\Trees\ComponentTree;
 use Gcego\Components\Validation\ComponentValidator;
 use Gcego\Components\Validation\ValidationResult;
@@ -60,6 +69,10 @@ final class ComponentManager
             throw InvalidBuilderException::notAComponent($component);
         }
 
+        if (is_a($component, DeclarativeComponent::class, true)) {
+            throw InvalidConfigurationException::declarativeOnly($component, 'Components::define()');
+        }
+
         if (! (new ReflectionClass($component))->isInstantiable()) {
             throw InvalidBuilderException::notInstantiableComponent($component);
         }
@@ -81,17 +94,102 @@ final class ComponentManager
     }
 
     /**
-     * @param  iterable<ComponentInterface|Buildable|iterable<mixed>|null>  $components
+     * The application's configureUsing() modifiers and builder macros.
      */
-    public function schema(iterable $components): Schema
+    public function configurator(): ComponentConfigurator
     {
-        $schema = $this->define(Schema::class)->components($components)->build();
+        $this->assertActive();
 
-        if (! $schema instanceof Schema) {
-            throw InvalidBuilderException::wrongComponent(Schema::class, $schema::class);
+        return $this->container->make(ComponentConfigurator::class);
+    }
+
+    /**
+     * Calls closures with Filament-style parameter injection.
+     */
+    public function evaluator(): Evaluator
+    {
+        $this->assertActive();
+
+        return $this->container->make(Evaluator::class);
+    }
+
+    /**
+     * Bring a schema to life over state: defaults are filled, closures
+     * evaluated, dependencies discovered and updates diffed.
+     *
+     * @param  State|array<array-key, mixed>  $state
+     * @param  EvaluationContext|array<string, mixed>  $context
+     */
+    public function live(ComponentInterface|Buildable $schema, State|array $state = [], EvaluationContext|array $context = []): LiveSchema
+    {
+        $this->assertActive();
+
+        return new LiveSchema(
+            $schema instanceof Buildable ? $schema->build() : $schema,
+            $state instanceof State ? $state : new State($state),
+            EvaluationContext::from($context),
+            $this->walker(),
+            $this->evaluator(),
+        );
+    }
+
+    public function walker(): ComponentWalker
+    {
+        $this->assertActive();
+
+        return $this->container->make(ComponentWalker::class);
+    }
+
+    /**
+     * Start immutable edits to a schema: modify, remove, insert, append.
+     */
+    public function patch(ComponentInterface|Buildable $schema): SchemaPatch
+    {
+        $this->assertActive();
+
+        return new SchemaPatch($schema instanceof Buildable ? $schema->build() : $schema);
+    }
+
+    /**
+     * Let any package extend the schema published under a key, typically
+     * from a service provider's boot():
+     *
+     *     Components::extend('customers.form', fn (SchemaPatch $patch) => $patch
+     *         ->insertAfter('email', TextInput::make(Name::make('loyalty_number'))));
+     *
+     * @param  Closure(SchemaPatch): SchemaPatch  $extension
+     */
+    public function extend(string $schema, Closure $extension): void
+    {
+        $this->configurator()->extend($schema, $extension);
+    }
+
+    /**
+     * Publish a schema under a key, applying every registered extension in
+     * registration order (later extensions see earlier additions).
+     */
+    public function extended(string $schema, ComponentInterface|Buildable $component): ComponentInterface
+    {
+        $component = $component instanceof Buildable ? $component->build() : $component;
+
+        foreach ($this->configurator()->extensionsFor($schema) as $extension) {
+            $patch = $extension($this->patch($component));
+
+            if (! $patch instanceof SchemaPatch) {
+                throw InvalidBuilderException::invalidValue(Component::class, 'extend', sprintf('Extensions of "%s" must return the patch: fn (SchemaPatch $patch) => $patch->remove(\'field\').', $schema));
+            }
+
+            $component = $patch->apply();
         }
 
-        return $schema;
+        return $component;
+    }
+
+    public function catalog(): ComponentCatalog
+    {
+        $this->assertActive();
+
+        return $this->container->make(ComponentCatalog::class);
     }
 
     /**
@@ -99,7 +197,38 @@ final class ComponentManager
      */
     public function collect(iterable $components): ComponentCollection
     {
-        return $this->schema($components)->children();
+        $this->assertActive();
+
+        return new ComponentCollection(...self::collected($components, 0));
+    }
+
+    /**
+     * @param  iterable<mixed>  $components
+     * @return list<ComponentInterface>
+     */
+    private static function collected(iterable $components, int $depth): array
+    {
+        if ($depth > 32) {
+            throw InvalidBuilderException::nestingTooDeep(Component::class, 32);
+        }
+
+        $collected = [];
+
+        foreach ($components as $component) {
+            if ($component instanceof Buildable) {
+                $component = $component->build();
+            }
+
+            if ($component instanceof ComponentInterface) {
+                $collected[] = $component;
+            } elseif (is_iterable($component)) {
+                array_push($collected, ...self::collected($component, $depth + 1));
+            } elseif ($component !== null) {
+                throw InvalidBuilderException::invalidChild(Component::class, $component);
+            }
+        }
+
+        return $collected;
     }
 
     /**

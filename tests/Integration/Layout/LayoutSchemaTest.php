@@ -3,27 +3,34 @@
 declare(strict_types=1);
 
 use Gcego\Components\Component;
+use Gcego\Components\Definitions\Children;
+use Gcego\Components\Definitions\Label;
+use Gcego\Components\Definitions\Name;
 use Gcego\Components\Exceptions\InvalidBuilderException;
-use Gcego\Components\Exceptions\InvalidComponentException;
+use Gcego\Components\Exceptions\InvalidDefinitionException;
 use Gcego\Components\Facades\Components;
+use Gcego\Components\Layout\Group;
+use Gcego\Components\Layout\Item;
 use Gcego\Components\Layout\Schema;
+use Gcego\Components\Layout\Section;
 use Gcego\Components\Properties\Property;
 use Gcego\Components\Schema\ComponentDefinition;
 use Gcego\Components\Schema\PropertyDefinition;
 use Gcego\Components\Schema\Type;
+use Gcego\Components\Tests\Fixtures\Collapsible;
 use Gcego\Components\Tests\Fixtures\DashboardSection;
 use Gcego\Components\Tests\Fixtures\ExampleComponent;
 use Gcego\Components\Tests\Fixtures\Style;
 
 it('builds the documented layout and normalizes its hierarchy', function (): void {
-    $schema = Components::schema([
-        Component::section('dashboard')->label('Dashboard')->components([
-            Component::group('metrics')->child([
-                Component::item('statistics'),
-                Component::item('activity'),
-            ]),
-        ]),
-    ])->assertValid();
+    $schema = Schema::make(Children::make([
+        Section::make(Name::make('dashboard'), Label::make('Dashboard'), Children::make([
+            Group::make(Name::make('metrics'), Children::make([
+                Item::make(Name::make('statistics')),
+                Item::make(Name::make('activity')),
+            ])),
+        ])),
+    ]))->assertValid();
 
     $output = $schema->normalize();
     expect($output['type'])->toBe('schema');
@@ -36,49 +43,48 @@ it('builds the documented layout and normalizes its hierarchy', function (): voi
         ->and($output['children'][0]['children'][0]['children'][1]['properties']['name'])->toBe('activity');
 });
 
-it('collects dynamic builders and skips conditional nulls without mutating builders', function (): void {
-    $group = Component::group('metrics');
+it('collects dynamic components and skips conditional nulls without mutating the original', function (): void {
+    $group = Group::make(Name::make('metrics'));
     $items = Component::collect((function (): Generator {
-        yield Component::item('statistics');
+        yield Item::make(Name::make('statistics'));
         yield null;
-        yield Component::item('activity')->build();
+        yield Item::make(Name::make('activity'));
     })());
 
-    $schema = Components::schema([$group->child($items)->components(Component::item('extra'))]);
+    $schema = Schema::make(Children::make([
+        $group->withDefinitions(Children::make([...$items->all(), Item::make(Name::make('extra'))])),
+    ]));
     expect($items)->toHaveCount(2)
-        ->and($group->build()->childCount())->toBe(0)
+        ->and($group->childCount())->toBe(0)
         ->and($schema->children()->first()?->childCount())->toBe(3)
-        ->and(Components::schema([])->assertValid()->childCount())->toBe(0);
+        ->and(Schema::make()->assertValid()->childCount())->toBe(0);
 });
 
-it('rejects unnamed layout nodes and children on leaf items during validation', function (): void {
-    expect(Components::schema([Component::section('')])->validate()->isValid())->toBeFalse();
-    expect(fn () => Components::schema([
-        Component::item('statistics')->child(Component::item('nested')),
-    ])->assertValid())->toThrow(InvalidComponentException::class);
+it('rejects empty names and children on leaf items', function (): void {
+    expect(fn () => Section::make(Name::make('')))->toThrow(InvalidDefinitionException::class)
+        ->and(fn () => Item::make(Name::make('statistics'), Children::make([Item::make(Name::make('nested'))])))
+        ->toThrow(InvalidDefinitionException::class, 'does not accept');
 });
 
-it('rejects non-child values at every layout entry point', function (string $entry, string $kind): void {
+it('rejects non-child values in child lists', function (string $entry, string $kind): void {
     $value = match ($kind) {
         'property' => new Property(Component::Label, 'injected'),
         'configuration' => new Style('hidden'),
         'scalar' => 'invalid',
     };
-    $values = (function () use ($value): Generator {
-        yield [[$value]];
-    })();
 
     expect(fn () => match ($entry) {
-        'schema' => Components::schema($values),
-        'collect' => Component::collect($values),
-        'components' => Component::section('dashboard')->components($values),
-        'child' => Component::group('metrics')->child($values),
-    })->toThrow(InvalidBuilderException::class, 'Child lists accept only');
-})->with(['schema', 'collect', 'components', 'child'])->with(['property', 'configuration', 'scalar']);
+        'collect' => Component::collect([[$value]]),
+        'children' => Children::make([$value]),
+    })->toThrow(match ($entry) {
+        'collect' => InvalidBuilderException::class,
+        'children' => InvalidDefinitionException::class,
+    });
+})->with(['collect', 'children'])->with(['property', 'configuration', 'scalar']);
 
-it('keeps custom components and all runtime services usable inside layouts', function (): void {
+it('keeps engine components and all runtime services usable inside layouts', function (): void {
     $custom = ExampleComponent::define('custom')->label('Custom');
-    $schema = Components::schema([Component::section('dashboard')->components([$custom])])->assertValid();
+    $schema = Schema::make(Children::make([Section::make(Name::make('dashboard'), Children::make([$custom]))]))->assertValid();
 
     expect($schema)->toBeInstanceOf(Schema::class)
         ->and($schema->children()->first()?->children()->first())->toBeInstanceOf(ExampleComponent::class)
@@ -87,7 +93,7 @@ it('keeps custom components and all runtime services usable inside layouts', fun
         ->and(Components::inspect($schema)->toArray())->toBeArray();
 });
 
-it('preserves custom label mapping and schema validation', function (): void {
+it('preserves custom label mapping and schema validation for engine components', function (): void {
     $component = new class extends Component
     {
         public const string Label = 'caption';
@@ -109,26 +115,25 @@ it('preserves custom label mapping and schema validation', function (): void {
         }
     };
     expect(fn () => $withoutLabel::define()->label('Label'))->toThrow(InvalidBuilderException::class);
-    expect(Component::item('typed')->label(42)->build()->validate()->isValid())->toBeFalse();
 });
 
 it('bounds recursive child lists at the layout boundary', function (): void {
     $children = [];
     $children[] = &$children;
 
-    expect(fn () => Components::schema($children))->toThrow(InvalidBuilderException::class, 'maximum nesting depth');
+    expect(fn () => Component::collect($children))->toThrow(InvalidBuilderException::class, 'maximum nesting depth');
 });
 
-it('supports layout extensions with inherited naming and custom settings', function (): void {
-    $section = DashboardSection::define('dashboard')->collapsible()->components([
-        Component::group('metrics')->child(Component::item('statistics')),
-    ]);
-    $schema = Components::schema([$section])->assertValid();
+it('supports layout extensions with inherited naming and custom definitions', function (): void {
+    $section = DashboardSection::make(Name::make('dashboard'), Collapsible::make(), Children::make([
+        Group::make(Name::make('metrics'), Children::make([Item::make(Name::make('statistics'))])),
+    ]));
+    $schema = Schema::make(Children::make([$section]))->assertValid();
     $built = $schema->children()->first();
 
     expect($built)->toBeInstanceOf(DashboardSection::class)
         ->and($built->type())->toBe('dashboard.section')
         ->and($built->name())->toBe('dashboard')
         ->and($built->get('collapsible'))->toBeTrue()
-        ->and(DashboardSection::define('')->build()->validate()->isValid())->toBeFalse();
+        ->and(DashboardSection::make()->get('collapsible'))->toBeFalse();
 });

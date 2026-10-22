@@ -1,9 +1,21 @@
 # Laravel integration
 
-`ComponentServiceProvider` is required. Composer installs the Illuminate runtime
-dependencies and lists `Gcego\Components\ComponentServiceProvider` in
-`extra.laravel.providers`, so Laravel discovers the package automatically.
-Laravel 12 and 13 are supported.
+Components runs inside a Laravel 13 application. `ComponentServiceProvider`
+registers every service, and the `Components` facade is the package entry
+point. Both are discovered automatically from `composer.json`.
+
+## Registration
+
+Composer's `extra.laravel` metadata lists the provider and the facade alias:
+
+```json
+"extra": {
+    "laravel": {
+        "providers": ["Gcego\\Components\\ComponentServiceProvider"],
+        "aliases": { "Components": "Gcego\\Components\\Facades\\Components" }
+    }
+}
+```
 
 If package discovery is disabled, register the provider in
 `bootstrap/providers.php`:
@@ -15,156 +27,258 @@ return [
 ];
 ```
 
-Component construction, schema access, builders and runtime services require the
-registered provider. Missing registration raises `InvalidConfigurationException`
-with instructions instead of silently creating default services.
+The provider is mandatory. Declaring a component, reading a schema or calling a
+package service without it throws `InvalidConfigurationException`:
 
-## Services and factories
+```text
+ComponentServiceProvider must be registered before using gcego/components. Enable Laravel package discovery or register Gcego\Components\ComponentServiceProvider in bootstrap/providers.php and boot Laravel facades.
+```
 
-The provider is deferred: Laravel loads it when a package service is first
-resolved. It registers the following services under `Gcego\Components`:
+There is no configuration file, migration, route or view to publish.
+
+### GCEGO package
+
+`gcego/core` is the only GCEGO package Components requires; any GCEGO Studio
+application can install it without forms, tables or panels, and the test suite
+enforces that boundary. The provider also implements
+`Gcego\Core\Contracts\PackageInterface`, so gcego/core discovers and boots it as
+the `gcego/components` package with `requires: ['gcego/core']` and the
+capabilities `components`, `components.schema`, `components.validation`,
+`components.normalization` and `components.traversal`. The provider is eager
+because gcego/core only discovers loaded providers; registration only declares
+bindings and builds no service.
+
+## Container bindings
+
+All services live under `Gcego\Components`:
 
 | Service | Lifetime | Purpose |
 | --- | --- | --- |
-| `ComponentManager` | Scoped | Package entry point and component factories |
+| `ComponentManager` | Scoped | Facade root: schema definition cache and every operation below |
+| `Catalog\ComponentCatalog` | Scoped | Alias-to-class registry of catalog and custom components |
+| `Configuration\ComponentConfigurator` | Singleton | `configureUsing()` defaults, engine builder macros and schema extensions |
+| `Evaluation\Evaluator` | Singleton | Closure parameter injection for computed values |
 | `Traversal\ComponentWalker` | Singleton | Path-aware traversal with cycle and depth checks |
 | `Validation\PropertyValidator` | Singleton | Property schema checks |
 | `Validation\ChildValidator` | Singleton | Child and configuration rules |
-| `Validation\ComponentValidator` | Singleton | Validation of the whole tree |
+| `Validation\ComponentValidator` | Singleton | Validation of whole trees |
 | `Normalization\ComponentNormalizer` | Singleton | Canonical component output |
 | `Inspection\ComponentInspector` | Singleton | Inspection snapshots for tooling |
-| `Building\ComponentBuilder` | Transient | A fresh builder for each definition |
+| `Building\ComponentBuilder` | Transient | Engine builders for framework component families |
 | `Trees\ComponentTree` | Transient | An independent tree for each root |
 
-Properties, schemas, collections, paths and validation results are data objects.
-Construct them normally; they do not have independent service providers or
-container singleton bindings.
+Properties, schemas, collections, paths, live schemas, patches and validation
+results are data objects; they have no bindings.
 
-## Facade
+## The `Components` facade
 
-Use `Gcego\Components\Facades\Components` as the package entry point. Laravel
-discovers the `Components` alias from the same Composer metadata as the provider:
+`Gcego\Components\Facades\Components` resolves the scoped `ComponentManager`.
+Components themselves are declared with their own `make()` and typed
+definitions; the facade operates on declared components.
+
+| Method | Purpose |
+| --- | --- |
+| `validate(ComponentInterface $root): ValidationResult` | Validate a whole tree. See [validation](validation.md). |
+| `normalize(ComponentInterface $root): array` | Canonical output of a tree. See [normalization](normalization.md). |
+| `normalizeValue(mixed $value, string $location = 'value'): mixed` | Normalize one value; `$location` names it in errors. |
+| `inspect(ComponentInterface $root): ComponentInspection` | Inspection snapshot for tooling. |
+| `tree(ComponentInterface $root): ComponentTree` | A new tree for the root. See [composition](composition.md). |
+| `walker(): ComponentWalker` | The configured walker. |
+| `collect(iterable $components): ComponentCollection` | Flatten components, `Buildable`s and nested iterables (up to 32 levels), skipping `null`. |
+| `catalog(): ComponentCatalog` | The scoped catalog. See [component catalog](component-catalog.md). |
+| `live(ComponentInterface\|Buildable $schema, State\|array $state = [], EvaluationContext\|array $context = []): LiveSchema` | Resolve a schema over state. See [reactivity](reactivity.md). |
+| `evaluator(): Evaluator` | The closure evaluator. |
+| `patch(ComponentInterface\|Buildable $schema): SchemaPatch` | Start an immutable patch. See [patching](patching.md). |
+| `extend(string $schema, Closure $extension): void` | Register a patch for a published schema key. |
+| `extended(string $schema, ComponentInterface\|Buildable $component): ComponentInterface` | Publish a schema with its registered extensions applied. |
+| `configurator(): ComponentConfigurator` | The configurator behind `configureUsing()`. |
+| `define(string $component, array $items = []): ComponentBuilder` | Engine builder for a framework component class. |
+| `make(string $component = Component::class, array $items = []): Component` | Build an engine component through `define()`. |
 
 ```php
 use Gcego\Components\Component;
+use Gcego\Components\Definitions\{Children, Name};
 use Gcego\Components\Facades\Components;
-use Gcego\Components\Properties\Property;
+use Gcego\Components\Layout\{Item, Schema, Section};
 
-$root = Components::make(items: [new Property(Component::Name, 'dashboard')]);
+$root = Schema::make(Children::make([
+    Section::make(Name::make('dashboard'), Children::make([
+        Item::make(Name::make('statistics')),
+    ])),
+]));
+
 Components::validate($root)->throwIfInvalid();
 $output = Components::normalize($root);
-$value = Components::normalizeValue($root->get(Component::Name));
-$inspection = Components::inspect($root);
 $tree = Components::tree($root);
+$inspection = Components::inspect($root);
 ```
 
-`Components::define(Text::class, ['name', 'Label'])` selects the component's
-builder class and resolves a new builder from the container. `make()` builds the
-result, including custom constructor adapters.
+`define()` and `make()` are for framework packages that build engine component
+families (see [components](components.md#engine-construction-package-authors)). Declarative
+components refuse them with `InvalidConfigurationException`:
+`… Button is declared only through … Button::make() with typed definitions, …; Components::define() is not available.`
 
-The facade resolves the provider's request/job-scoped `ComponentManager`. The
-manager remains available for constructor injection. Retained managers from an
-earlier application or flushed scope are rejected; resolve the manager again
-through the facade or container. No manual singleton resolver or fallback
-container is created by the package.
+Component convenience methods (`validate()`, `assertValid()`, `normalize()`,
+`tree()`) delegate to the same services, so they use the same configuration as
+the facade and constructor injection.
 
-Existing declarations remain supported after provider registration:
+### Manager lifetime
 
-```php
-$root = new Component(new Property(Component::Name, 'dashboard'));
-$root->assertValid();
-$root->normalize();
-$root->tree();
+The facade does not cache its root (`$cached = false`): every call resolves the
+manager from the container. `ComponentManager` can be constructor-injected, but
+an instance retained past its application or scope is rejected:
+
+```text
+ComponentManager belongs to an inactive application or scope. Resolve it again through the Components facade or service container.
 ```
 
-`Component::define()`, `validate()`, `normalize()` and `tree()` delegate through
-the facade to registered services. Their behavior uses the same configuration as
-facade calls and constructor injection. Runtime services receive dependencies
-through constructor injection without constructing independent defaults.
+Managers cannot be serialized (`ComponentManager cannot be serialized. …`), so
+never store one in a session, cache or queued job. Their debug output redacts
+the container.
 
-## Customization
+## Overriding services
 
-Register overrides in an application service provider's `register()` method,
-before resolving package services or validating components:
+Bind replacements in an application service provider's `register()` method,
+before anything resolves the package services:
 
 ```php
+use Gcego\Components\Normalization\ComponentNormalizer;
 use Gcego\Components\Traversal\ComponentWalker;
+use Illuminate\Contracts\Container\Container;
 
-$this->app->singleton(ComponentWalker::class, static fn (): ComponentWalker => new ComponentWalker(maxDepth: 64));
+public function register(): void
+{
+    $this->app->singleton(ComponentWalker::class, static fn (): ComponentWalker => new ComponentWalker(maxDepth: 64));
+    $this->app->singleton(ComponentNormalizer::class, static fn (Container $app): ComponentNormalizer => new ComponentNormalizer(
+        $app->make(ComponentWalker::class), includeSchema: true,
+    ));
+}
 ```
 
-The package provider preserves existing instances, factories and aliases. The
-configured walker is used by validation, normalization, inspection and trees,
-including component convenience methods. Schema definitions and validation caches
-are isolated to the active Laravel scope. Validation uses a weak reference to its
-manager so reused component instances do not retain an earlier scope. Configure
-services before validating components.
+The package provider skips any service that already has a binding, shared
+instance or alias, so overrides registered first are kept; bindings registered
+later replace the package's. The configured walker is used by validation,
+normalization, inspection, trees, patches and the live engine, including the
+component convenience methods.
 
-There is no configuration file, migration or route to publish. The facade and
-provider are discovered automatically.
+## Scopes, Octane and queues
 
-## Tests and command-line tools
+Scoped services are released whenever Laravel forgets scoped instances: at the
+start of each Octane request and each queue job. Applications with their own
+worker lifecycle must call `$app->forgetScopedInstances()` at the boundary.
 
-Outside a booted Laravel application, initialize the container through the same
-provider before using components:
+| Released at scope reset | Kept for the application's lifetime |
+| --- | --- |
+| `ComponentManager` and its cached schema definitions | `ComponentConfigurator`: `configureUsing()` defaults, macros and `extend()` patches |
+| `ComponentCatalog` and aliases registered on it | The evaluator, walker, validators, normalizer and inspector |
+
+Validation results cached on components hold only a weak reference to their
+manager, so a component reused across scopes is validated again by the active
+manager rather than retaining an earlier scope.
+
+## Where to register configuration
+
+Register application-wide configuration once, in a service provider:
+
+```php
+use App\Components\RatingInput;
+use Gcego\Components\Catalog\ComponentCatalog;
+use Gcego\Components\Components\Actions\Button;
+use Gcego\Components\Components\Inputs\TextInput;
+use Gcego\Components\Definitions\{Label, Name, Variant};
+use Gcego\Components\Facades\Components;
+use Gcego\Components\Patching\SchemaPatch;
+
+public function register(): void
+{
+    // The catalog is scoped: reapply aliases whenever it is resolved again.
+    $this->app->afterResolving(ComponentCatalog::class, static function (ComponentCatalog $catalog): void {
+        $catalog->register('ratingInput', RatingInput::class);
+    });
+}
+
+public function boot(): void
+{
+    // Kept for the application's lifetime.
+    Button::configureUsing(fn (): array => [Variant::make('secondary')]);
+
+    Components::extend('customers.form', fn (SchemaPatch $patch): SchemaPatch => $patch
+        ->insertAfter('account.email', TextInput::make(Name::make('loyalty_number'), Label::make('Loyalty number'))));
+}
+```
+
+- `configureUsing()` and `extend()` belong in `boot()`. They are stored on the
+  application singleton configurator, so calling them on every request under
+  Octane (from middleware or controllers) would register duplicates.
+- Catalog aliases belong in an `afterResolving()` callback. Calling
+  `Components::catalog()->register()` directly lasts only for the current
+  scope.
+
+See [definitions](definitions.md) for `configureUsing()` and `presets()`, and
+[patching](patching.md) for extensions.
+
+## Testing
+
+In a Laravel application, the test application loads the discovered provider,
+and each test boots a fresh application, so configurator state (defaults,
+extensions) never leaks between tests.
+
+Outside a full application (package tests, scripts, benchmarks), create an
+application, point facades at it and register the provider. This package's
+`tests/Pest.php` does it for every test:
 
 ```php
 use Gcego\Components\ComponentServiceProvider;
+use Illuminate\Container\Container;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\Facade;
 
-$app = new Application(dirname(__DIR__));
-Facade::clearResolvedInstances();
-Facade::setFacadeApplication($app);
-$app->register(ComponentServiceProvider::class);
+pest()->beforeEach(function (): void {
+    $app = new Application(dirname(__DIR__));
+    Facade::clearResolvedInstances();
+    Facade::setFacadeApplication($app);
+    $app->register(ComponentServiceProvider::class);
+})->afterEach(function (): void {
+    Facade::clearResolvedInstances();
+    Facade::setFacadeApplication(null);
+    Container::setInstance(null);
+})->in('Unit', 'Integration', 'Architecture');
 ```
 
-Laravel is also a development dependency so tests and benchmarks exercise a real
-application, including deferred provider discovery. It uses the required
-provider and runtime dependencies; there is no separate initialization path.
+To test scope behavior, call `$app->forgetScopedInstances()` and resolve the
+facade again. To test an override, bind it on the container before the first
+component is declared. `laravel/framework` is a development dependency so the
+suite exercises a real application, including Composer package discovery and
+gcego/core package registration.
 
-## Namespace migration
+`examples/run.php` uses the same bootstrap for a standalone script; see the
+[usage guide](usage.md).
 
-Classes are organized by responsibility, with matching PSR-4 folders. Update
-imports from the previous root namespaces as follows:
+## Upgrading
 
-| Previous class under `Gcego\Components` | New namespace under `Gcego\Components` |
+The base `Component`, `ComponentManager` and `ComponentServiceProvider` live in
+the `Gcego\Components` root namespace. Earlier releases also had these
+locations:
+
+| Previous class under `Gcego\Components` | Current location under `Gcego\Components` |
 | --- | --- |
+| `Services\ComponentManager`, `Providers\ComponentServiceProvider` | `ComponentManager`, `ComponentServiceProvider` |
 | `Property` | `Properties\Property` |
 | `ComponentCollection`, `PropertyCollection`, `ConfigurationCollection` | `Collections\…` |
 | `ComponentDefinition`, `PropertyDefinition`, `Type`, `TypeKind` | `Schema\…` |
 | `ComponentTree`, `ComponentPath`, `TreeNode` | `Trees\…` |
+| `Layout\NamedComponent`, `Foundation\NamedComponent` | removed; extend `Foundation\SchemaComponent` |
+| `Forms\Field` | `Components\Inputs\FieldComponent` |
 
-The base `Component`, `ComponentManager` and `ComponentServiceProvider` live at
-`Gcego\Components` in the package root. If using the intermediate
-`Services\ComponentManager` or `Providers\ComponentServiceProvider` namespaces,
-update those imports to the root namespaces. Existing `Contracts`,
-`Building`, `Validation`, `Normalization`, `Inspection`, `Traversal`, `Support`
-and `Exceptions` namespaces are unchanged. Tests mirror these folders.
+Replace `ComponentManager::instance()->…` with `Components::…`, or inject the
+manager. After updating, regenerate Composer autoloading and Laravel's package
+discovery cache (`php artisan package:discover`). The catalog namespaces and the
+declaration API changed too; see the [changelog](../CHANGELOG.md).
 
-Replace `ComponentManager::instance()->…` calls with `Components::…` using the
-facade import. For direct access to the underlying manager, use constructor
-injection or `app(\Gcego\Components\ComponentManager::class)`.
-Update any manually registered provider name, regenerate Composer autoloading,
-and rebuild Laravel's package discovery cache after updating the package.
+## Distribution
 
-## Composer registration and distribution
-
-`composer.json` declares the `gcego/components` library name, PSR-4 autoloading,
-runtime dependencies, and Laravel provider and facade discovery. Composer handles
-package installation; Laravel discovers the root service provider through
-`extra.laravel.providers`. No additional package registry or Composer plugin is
-needed for this discovery path.
-
-The archive configuration excludes dependencies, test artifacts, local environment
-files and developer directories while retaining source code, documentation and
-license files. Validate a release with `composer validate --strict`,
-`composer audit --locked`, the package tests, and `composer archive`.
-
-## Long-running workers and scope cleanup
-
-Laravel's scoped binding lifecycle releases manager-owned schema definitions at
-request or job boundaries. Applications that create their own worker lifecycle
-must call `$app->forgetScopedInstances()` at the boundary. The facade does not
-keep a second manager cache. Resolve a new manager after scope cleanup; do not
-serialize managers into sessions or queues. Debug output redacts their container.
+The Composer archive excludes dependencies, tests, benchmarks, build artifacts,
+local environment files and editor directories, and keeps source code,
+documentation and license files. Validate a release with
+`composer validate --strict`, `composer audit --locked`, `composer check` and
+`composer archive`.
